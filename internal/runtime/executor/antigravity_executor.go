@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -49,7 +48,20 @@ const (
 	defaultAntigravityAgent        = "antigravity/1.19.6 darwin/arm64"
 	antigravityAuthType            = "antigravity"
 	refreshSkew                    = 3000 * time.Second
-	// systemInstruction              = "You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.**Absolute paths only****Proactiveness**"
+
+	// antigravityIdentityPrefix is the Antigravity system identity injected into
+	// systemInstruction to match genuine client fingerprint.
+	antigravityIdentityPrefix = `<identity>
+You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.
+You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.
+The USER will send you requests, which you must always prioritize addressing. Along with each USER request, we will attach additional metadata about their current state, such as what files they have open and where their cursor is.
+This information may or may not be relevant to the coding task, it is up for you to decide.
+</identity>`
+
+	// antigravityUserInfoBlock is an empty user_information block injected as
+	// the first contents entry to match genuine client request structure.
+	antigravityUserInfoBlock = `<user_information>
+</user_information>`
 )
 
 var (
@@ -151,50 +163,48 @@ var (
 	antigravityTransportOnce sync.Once
 )
 
-func cloneTransportWithHTTP11(base *http.Transport) *http.Transport {
+// cloneTransportForAntigravity creates a transport with HTTP/2 support and
+// connection pooling enabled, matching the real Antigravity client behavior.
+func cloneTransportForAntigravity(base *http.Transport) *http.Transport {
 	if base == nil {
 		return nil
 	}
 
 	clone := base.Clone()
-	clone.ForceAttemptHTTP2 = false
-	// Wipe TLSNextProto to prevent implicit HTTP/2 upgrade.
-	clone.TLSNextProto = make(map[string]func(authority string, c *tls.Conn) http.RoundTripper)
-	if clone.TLSClientConfig == nil {
-		clone.TLSClientConfig = &tls.Config{}
-	} else {
-		clone.TLSClientConfig = clone.TLSClientConfig.Clone()
-	}
-	// Actively advertise only HTTP/1.1 in the ALPN handshake.
-	clone.TLSClientConfig.NextProtos = []string{"http/1.1"}
+	// Enable HTTP/2 to match the real Antigravity client.
+	clone.ForceAttemptHTTP2 = true
+	// Connection pooling settings for persistent connections.
+	clone.MaxIdleConns = 100
+	clone.MaxIdleConnsPerHost = 10
+	clone.IdleConnTimeout = 90 * time.Second
 	return clone
 }
 
-// initAntigravityTransport creates the shared HTTP/1.1 transport exactly once.
+// initAntigravityTransport creates the shared HTTP/2-capable transport exactly once.
 func initAntigravityTransport() {
 	base, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
 		base = &http.Transport{}
 	}
-	antigravityTransport = cloneTransportWithHTTP11(base)
+	antigravityTransport = cloneTransportForAntigravity(base)
 }
 
 // newAntigravityHTTPClient creates an HTTP client specifically for Antigravity,
-// enforcing HTTP/1.1 by disabling HTTP/2 to perfectly mimic Node.js https defaults.
+// using HTTP/2 with connection reuse to match genuine client behavior.
 // The underlying Transport is a singleton to avoid leaking connection pools.
 func newAntigravityHTTPClient(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth, timeout time.Duration) *http.Client {
 	antigravityTransportOnce.Do(initAntigravityTransport)
 
 	client := newProxyAwareHTTPClient(ctx, cfg, auth, timeout)
-	// If no transport is set, use the shared HTTP/1.1 transport.
+	// If no transport is set, use the shared HTTP/2-capable transport.
 	if client.Transport == nil {
 		client.Transport = antigravityTransport
 		return client
 	}
 
-	// Preserve proxy settings from proxy-aware transports while forcing HTTP/1.1.
+	// Preserve proxy settings from proxy-aware transports while enabling HTTP/2.
 	if transport, ok := client.Transport.(*http.Transport); ok {
-		client.Transport = cloneTransportWithHTTP11(transport)
+		client.Transport = cloneTransportForAntigravity(transport)
 	}
 	return client
 }
@@ -244,7 +254,7 @@ func (e *AntigravityExecutor) HttpRequest(ctx context.Context, auth *cliproxyaut
 	}
 	// Content-Length is managed automatically by Go's http.Client from the Body
 	httpReq.Header.Set("User-Agent", resolveUserAgent(auth))
-	httpReq.Close = true // sends Connection: close
+	// Do not set httpReq.Close — allow HTTP/2 connection reuse to match real client.
 
 	// Inject Authorization: Bearer <token>
 	if err := e.PrepareRequest(httpReq, auth); err != nil {
@@ -316,6 +326,9 @@ attemptLoop:
 			}
 
 			httpResp, errDo := httpClient.Do(httpReq)
+			if httpResp != nil {
+				log.Infof("antigravity executor: upstream HTTP protocol: %s", httpResp.Proto)
+			}
 			if errDo != nil {
 				recordAPIResponseError(ctx, e.cfg, errDo)
 				if errors.Is(errDo, context.Canceled) || errors.Is(errDo, context.DeadlineExceeded) {
@@ -458,6 +471,9 @@ attemptLoop:
 			}
 
 			httpResp, errDo := httpClient.Do(httpReq)
+			if httpResp != nil {
+				log.Infof("antigravity executor: upstream HTTP protocol: %s", httpResp.Proto)
+			}
 			if errDo != nil {
 				recordAPIResponseError(ctx, e.cfg, errDo)
 				if errors.Is(errDo, context.Canceled) || errors.Is(errDo, context.DeadlineExceeded) {
@@ -849,6 +865,9 @@ attemptLoop:
 				return nil, err
 			}
 			httpResp, errDo := httpClient.Do(httpReq)
+			if httpResp != nil {
+				log.Infof("antigravity executor: upstream HTTP protocol: %s", httpResp.Proto)
+			}
 			if errDo != nil {
 				recordAPIResponseError(ctx, e.cfg, errDo)
 				if errors.Is(errDo, context.Canceled) || errors.Is(errDo, context.DeadlineExceeded) {
@@ -1520,8 +1539,9 @@ func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyau
 	if errReq != nil {
 		return nil, errReq
 	}
-	httpReq.Close = true
+	// Do not set httpReq.Close — allow HTTP/2 connection reuse to match real client.
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept-Encoding", "gzip")
 	httpReq.Header.Set("Authorization", "Bearer "+token)
 	httpReq.Header.Set("User-Agent", resolveUserAgent(auth))
 	if host := resolveHost(base); host != "" {
@@ -1765,11 +1785,42 @@ func geminiToAntigravity(modelName string, payload []byte, projectID string) []b
 		template, _ = sjson.SetRaw(template, "request.toolConfig", toolConfig.Raw)
 		template, _ = sjson.Delete(template, "toolConfig")
 	}
+
+	// Inject Antigravity identity into systemInstruction if not already present.
+	if !isImageModel {
+		sysText := gjson.Get(template, "request.systemInstruction.parts.0.text").String()
+		if !strings.Contains(sysText, "<identity>") {
+			// Prepend identity prefix to the existing system instruction.
+			existingParts := gjson.Get(template, "request.systemInstruction.parts")
+			template, _ = sjson.Set(template, "request.systemInstruction.role", "user")
+			template, _ = sjson.Set(template, "request.systemInstruction.parts", []any{})
+			template, _ = sjson.Set(template, "request.systemInstruction.parts.0.text", antigravityIdentityPrefix)
+			if existingParts.Exists() && existingParts.IsArray() {
+				for _, part := range existingParts.Array() {
+					template, _ = sjson.SetRaw(template, "request.systemInstruction.parts.-1", part.Raw)
+				}
+			}
+		}
+
+		// Inject empty <user_information> as the first content entry.
+		existingContents := gjson.Get(template, "request.contents")
+		if existingContents.Exists() && existingContents.IsArray() {
+			firstText := gjson.Get(template, "request.contents.0.parts.0.text").String()
+			if !strings.Contains(firstText, "<user_information>") {
+				newContents := `[{"role":"user","parts":[{"text":"` + strings.ReplaceAll(antigravityUserInfoBlock, "\n", `\n`) + `"}]}]`
+				for _, content := range existingContents.Array() {
+					newContents, _ = sjson.SetRaw(newContents, "-1", content.Raw)
+				}
+				template, _ = sjson.SetRaw(template, "request.contents", newContents)
+			}
+		}
+	}
+
 	return []byte(template)
 }
 
 func generateRequestID() string {
-	return "agent-" + uuid.NewString()
+	return fmt.Sprintf("agent/%d/%s/0", time.Now().UnixMilli(), uuid.NewString())
 }
 
 func generateImageGenRequestID() string {
