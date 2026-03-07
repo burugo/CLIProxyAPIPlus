@@ -45,7 +45,7 @@ const (
 	antigravityModelsPath          = "/v1internal:fetchAvailableModels"
 	antigravityClientID            = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
 	antigravityClientSecret        = "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"
-	defaultAntigravityAgent        = "antigravity/1.19.6 darwin/arm64"
+	defaultAntigravityAgent        = "antigravity/1.20.4 darwin/arm64"
 	antigravityAuthType            = "antigravity"
 	refreshSkew                    = 3000 * time.Second
 
@@ -326,9 +326,6 @@ attemptLoop:
 			}
 
 			httpResp, errDo := httpClient.Do(httpReq)
-			if httpResp != nil {
-				log.Infof("antigravity executor: upstream HTTP protocol: %s", httpResp.Proto)
-			}
 			if errDo != nil {
 				recordAPIResponseError(ctx, e.cfg, errDo)
 				if errors.Is(errDo, context.Canceled) || errors.Is(errDo, context.DeadlineExceeded) {
@@ -471,9 +468,6 @@ attemptLoop:
 			}
 
 			httpResp, errDo := httpClient.Do(httpReq)
-			if httpResp != nil {
-				log.Infof("antigravity executor: upstream HTTP protocol: %s", httpResp.Proto)
-			}
 			if errDo != nil {
 				recordAPIResponseError(ctx, e.cfg, errDo)
 				if errors.Is(errDo, context.Canceled) || errors.Is(errDo, context.DeadlineExceeded) {
@@ -865,9 +859,6 @@ attemptLoop:
 				return nil, err
 			}
 			httpResp, errDo := httpClient.Do(httpReq)
-			if httpResp != nil {
-				log.Infof("antigravity executor: upstream HTTP protocol: %s", httpResp.Proto)
-			}
 			if errDo != nil {
 				recordAPIResponseError(ctx, e.cfg, errDo)
 				if errors.Is(errDo, context.Canceled) || errors.Is(errDo, context.DeadlineExceeded) {
@@ -1175,7 +1166,7 @@ func FetchAntigravityModels(ctx context.Context, auth *cliproxyauth.Auth, cfg *c
 	token, updatedAuth, errToken := exec.ensureAccessToken(ctx, auth)
 	if errToken != nil || token == "" {
 		return fallbackAntigravityPrimaryModels()
-  }
+	}
 	if updatedAuth != nil {
 		auth = updatedAuth
 	}
