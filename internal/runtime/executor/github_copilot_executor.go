@@ -491,7 +491,9 @@ func (e *GitHubCopilotExecutor) applyHeaders(r *http.Request, apiToken string, b
 	r.Header.Set("X-Request-Id", uuid.NewString())
 
 	initiator := "user"
-	if role := detectLastConversationRole(body); role == "assistant" || role == "tool" {
+	if detectSubagent(body) {
+		initiator = "agent"
+	} else if role := detectLastConversationRole(body); role == "assistant" || role == "tool" {
 		initiator = "agent"
 	}
 	r.Header.Set("X-Initiator", initiator)
@@ -531,6 +533,44 @@ func detectLastConversationRole(body []byte) string {
 	}
 
 	return ""
+}
+
+// detectSubagent checks whether the request originates from a CLI tool's
+// subagent (e.g. Claude Code's file-search or read-only exploration
+// agents). These subagent requests always arrive with role=user as the
+// last message, but should be marked as agent-initiated so they don't
+// consume an extra premium-request slot.
+func detectSubagent(body []byte) bool {
+	if len(body) == 0 {
+		return false
+	}
+	messages := gjson.GetBytes(body, "messages")
+	if !messages.Exists() || !messages.IsArray() {
+		return false
+	}
+	for _, msg := range messages.Array() {
+		if msg.Get("role").String() != "system" {
+			continue
+		}
+		text := msg.Get("content").String()
+		if text == "" {
+			// content may be an array of objects with .text fields
+			content := msg.Get("content")
+			if content.IsArray() {
+				for _, part := range content.Array() {
+					text += part.Get("text").String()
+				}
+			}
+		}
+		if hasSubagentMarkers(text) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasSubagentMarkers(text string) bool {
+	return strings.Contains(text, "READ-ONLY")
 }
 
 // detectVisionContent checks if the request body contains vision/image content.
