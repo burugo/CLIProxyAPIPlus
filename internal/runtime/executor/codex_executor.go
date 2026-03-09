@@ -29,7 +29,7 @@ import (
 
 const (
 	codexClientVersion = "0.101.0"
-	codexUserAgent     = "codex_cli_rs/0.101.0 (Mac OS 26.0.1; arm64) Apple_Terminal/464"
+	codexUserAgent     = "opencode/1.2.21 (darwin 25.3.0; arm64) ai-sdk/provider-utils/3.0.20 runtime/bun/1.3.10"
 )
 
 var dataTag = []byte("data:")
@@ -113,9 +113,6 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	body, _ = sjson.DeleteBytes(body, "previous_response_id")
 	body, _ = sjson.DeleteBytes(body, "prompt_cache_retention")
 	body, _ = sjson.DeleteBytes(body, "safety_identifier")
-	if !gjson.GetBytes(body, "instructions").Exists() {
-		body, _ = sjson.SetBytes(body, "instructions", "")
-	}
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
 	httpReq, err := e.cacheHelper(ctx, from, url, req, body)
@@ -312,9 +309,6 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	body, _ = sjson.DeleteBytes(body, "prompt_cache_retention")
 	body, _ = sjson.DeleteBytes(body, "safety_identifier")
 	body, _ = sjson.SetBytes(body, "model", baseModel)
-	if !gjson.GetBytes(body, "instructions").Exists() {
-		body, _ = sjson.SetBytes(body, "instructions", "")
-	}
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
 	httpReq, err := e.cacheHelper(ctx, from, url, req, body)
@@ -416,9 +410,6 @@ func (e *CodexExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth
 	body, _ = sjson.DeleteBytes(body, "prompt_cache_retention")
 	body, _ = sjson.DeleteBytes(body, "safety_identifier")
 	body, _ = sjson.SetBytes(body, "stream", false)
-	if !gjson.GetBytes(body, "instructions").Exists() {
-		body, _ = sjson.SetBytes(body, "instructions", "")
-	}
 
 	enc, err := tokenizerForCodexModel(baseModel)
 	if err != nil {
@@ -631,7 +622,7 @@ func (e *CodexExecutor) cacheHelper(ctx context.Context, from sdktranslator.Form
 	}
 	if cache.ID != "" {
 		httpReq.Header.Set("Conversation_id", cache.ID)
-		httpReq.Header.Set("Session_id", cache.ID)
+		httpReq.Header["session_id"] = []string{cache.ID}
 	}
 	return httpReq, nil
 }
@@ -646,14 +637,20 @@ func applyCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, token string, s
 	}
 
 	misc.EnsureHeader(r.Header, ginHeaders, "Version", codexClientVersion)
-	misc.EnsureHeader(r.Header, ginHeaders, "Session_id", uuid.NewString())
 	misc.EnsureHeader(r.Header, ginHeaders, "User-Agent", codexUserAgent)
 
-	if stream {
-		r.Header.Set("Accept", "text/event-stream")
-	} else {
-		r.Header.Set("Accept", "application/json")
+	// Use raw map access to bypass Go's Title-Casing for session_id
+	if ginHeaders != nil {
+		if val := strings.TrimSpace(ginHeaders.Get("Session_id")); val != "" {
+			r.Header["session_id"] = []string{val}
+		} else {
+			r.Header["session_id"] = []string{uuid.NewString()}
+		}
+	} else if _, exists := r.Header["session_id"]; !exists {
+		r.Header["session_id"] = []string{uuid.NewString()}
 	}
+
+	r.Header.Set("Accept", "*/*")
 	r.Header.Set("Connection", "Keep-Alive")
 
 	isAPIKey := false
@@ -663,10 +660,11 @@ func applyCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, token string, s
 		}
 	}
 	if !isAPIKey {
-		r.Header.Set("Originator", "codex_cli_rs")
+		// Use raw map access to preserve exact casing for originator and ChatGPT-Account-Id
+		r.Header["originator"] = []string{"opencode"}
 		if auth != nil && auth.Metadata != nil {
 			if accountID, ok := auth.Metadata["account_id"].(string); ok {
-				r.Header.Set("Chatgpt-Account-Id", accountID)
+				r.Header["ChatGPT-Account-Id"] = []string{accountID}
 			}
 		}
 	}
