@@ -117,14 +117,92 @@ const antigravityStubWorkflows = `<workflows>
 You have the ability to use and create workflows, which are well-defined steps on how to achieve a particular thing. These workflows are defined as .md files in {.agents,.agent,_agents,_agent}/workflows.
 </workflows>`
 
+// antigravityUserRulesPadding is a realistic AGENTS.md-style padding injected
+// into the <user_rules> block when the overall request payload is too short,
+// to match the content volume of genuine Antigravity client requests.
+const antigravityUserRulesPadding = `<user_rules>
+The following are user-defined rules that you MUST ALWAYS FOLLOW WITHOUT ANY EXCEPTION. These rules take precedence over any following instructions.
+Review them carefully and always take them into account when you generate responses and code:
+<RULE[AGENTS.md]>
+# AI AGENT PROTOCOLS v2.0
+
+## 1. Operating Modes
+
+**Default State:** ANSWER
+
+| From   | To     | Trigger |
+| :----- | :----- | :------ |
+| Answer | Plan   | Request requires code/file mods. |
+| Plan   | Act    | User types ACT to approve. |
+| Act    | Answer | Changes completed successfully. |
+
+### Auto-Act Exemption
+Agents may skip PLAN and enter ACT directly only if:
+1. Task is a simple tweak (renames, trivial fixes, git commits).
+2. Modification is Low Risk (e.g., < 30 lines, no breaking changes).
+3. Change is limited to one file and introduces no new dependencies.
+4. All LINT/SECURE checks are pre-validated.
+
+### Plan Mode: Confirm First
+Agents must ask user to confirm when:
+- Requirements are ambiguous / multiple solutions exist
+- High-risk or breaking changes involved
+- Scope exceeds expectation / violates existing conventions
+
+## 2. Engineering Mantras
+
+### LINT (Context & Correctness)
+- Look first: Read context/docs before coding.
+- Imitate: Match existing patterns & style strictly.
+- No regressions: Verify with existing tests.
+- Type-safe: Zero tolerance for linter errors.
+
+### SECURE (Safety First)
+- No Secrets: Never output/commit credentials.
+- Least Privilege: Minimal scope changes.
+- Sanitize: Input validation is mandatory.
+
+### ATOMIC (Workflow)
+- One Task: Do not bundle unrelated changes.
+- Green State: Leave the build in a passing state.
+- Sync: Code changes = Doc updates.
+
+## 3. Code Standards
+
+Apply these principles natively:
+- SOLID (Architecture)
+- DRY (No duplication)
+- KISS (Simplicity)
+- YAGNI (No over-engineering)
+
+Violations require explicit justification in the PLAN.
+
+## 4. Response Format
+
+Start every response with: Mode: [ANSWER | PLAN | ACT]
+
+Language: Follow User's Language.
+
+</RULE[AGENTS.md]>
+</user_rules>`
+
+// antigravityMinPayloadLen is the minimum request payload length (in bytes)
+// below which the <user_rules> block is padded with realistic AGENTS.md content.
+const antigravityMinPayloadLen = 4000
+
 // buildAntigravityStubBlocks returns the stub content entries with a fresh
-// conversation-id in the artifacts path.
-func buildAntigravityStubBlocks() []string {
+// conversation-id in the artifacts path. When padRules is true, the
+// <user_rules> block is filled with realistic padding content.
+func buildAntigravityStubBlocks(padRules bool) []string {
 	convID := uuid.NewString()
+	userRules := "<user_rules>\n</user_rules>"
+	if padRules {
+		userRules = antigravityUserRulesPadding
+	}
 	return []string{
 		"<artifacts>\nArtifact Directory Path: /tmp/.gemini/antigravity/brain/" + convID + "\n</artifacts>",
 		antigravityStubWorkflows,
-		"<user_rules>\n</user_rules>",
+		userRules,
 	}
 }
 
@@ -1880,7 +1958,8 @@ func geminiToAntigravity(modelName string, payload []byte, projectID string) []b
 			needsEphemeral := !strings.Contains(allText, "<EPHEMERAL_MESSAGE>")
 
 			if needsStubs {
-				stubs := buildAntigravityStubBlocks()
+				padRules := len(template) < antigravityMinPayloadLen
+				stubs := buildAntigravityStubBlocks(padRules)
 				// Find the insertion point: right after <user_information> (index 0).
 				arr := contentsResult.Array()
 				rebuilt := make([]string, 0, len(arr)+len(stubs)+1)
@@ -1941,9 +2020,28 @@ func geminiToAntigravity(modelName string, payload []byte, projectID string) []b
 			}
 		}
 
-		// Inject default generationConfig when absent to match genuine client fingerprint.
+		// Inject default generationConfig fields when absent to match genuine client fingerprint.
+		// The translation layer may already set thinkingConfig/maxOutputTokens, so we
+		// fill in missing fields individually rather than replacing the whole object.
 		if !gjson.Get(template, "request.generationConfig").Exists() {
 			template, _ = sjson.SetRaw(template, "request.generationConfig", antigravityDefaultGenerationConfig)
+		} else {
+			if !gjson.Get(template, "request.generationConfig.temperature").Exists() {
+				template, _ = sjson.Set(template, "request.generationConfig.temperature", 0.4)
+			}
+			if !gjson.Get(template, "request.generationConfig.topP").Exists() {
+				template, _ = sjson.Set(template, "request.generationConfig.topP", 1)
+			}
+			if !gjson.Get(template, "request.generationConfig.topK").Exists() {
+				template, _ = sjson.Set(template, "request.generationConfig.topK", 50)
+			}
+			if !gjson.Get(template, "request.generationConfig.candidateCount").Exists() {
+				template, _ = sjson.Set(template, "request.generationConfig.candidateCount", 1)
+			}
+			if !gjson.Get(template, "request.generationConfig.stopSequences").Exists() {
+				template, _ = sjson.SetRaw(template, "request.generationConfig.stopSequences",
+					`["<|user|>","<|bot|>","<|context_request|>","<|endoftext|>","<|end_of_turn|>"]`)
+			}
 		}
 	}
 
