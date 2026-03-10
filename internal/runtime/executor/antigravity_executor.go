@@ -1940,20 +1940,27 @@ func geminiToAntigravity(modelName string, payload []byte, projectID string) []b
 		template, _ = sjson.Delete(template, "toolConfig")
 	}
 
-	// Inject Antigravity identity into systemInstruction if not already present.
+	// Inject Antigravity identity into systemInstruction if not already present,
+	// then merge all parts into a single text part to match the genuine client fingerprint.
 	if !isImageModel {
 		sysText := gjson.Get(template, "request.systemInstruction.parts.0.text").String()
 		if !strings.Contains(sysText, "<identity>") {
-			// Prepend identity prefix to the existing system instruction.
+			// Collect all existing part texts and prepend identity prefix.
+			var merged strings.Builder
+			merged.WriteString(antigravityIdentityPrefix)
 			existingParts := gjson.Get(template, "request.systemInstruction.parts")
-			template, _ = sjson.Set(template, "request.systemInstruction.role", "user")
-			template, _ = sjson.Set(template, "request.systemInstruction.parts", []any{})
-			template, _ = sjson.Set(template, "request.systemInstruction.parts.0.text", antigravityIdentityPrefix)
 			if existingParts.Exists() && existingParts.IsArray() {
 				for _, part := range existingParts.Array() {
-					template, _ = sjson.SetRaw(template, "request.systemInstruction.parts.-1", part.Raw)
+					t := part.Get("text").String()
+					if t != "" {
+						merged.WriteString("\n\n")
+						merged.WriteString(t)
+					}
 				}
 			}
+			template, _ = sjson.Set(template, "request.systemInstruction.role", "user")
+			template, _ = sjson.Set(template, "request.systemInstruction.parts", []any{})
+			template, _ = sjson.Set(template, "request.systemInstruction.parts.0.text", merged.String())
 		}
 
 		// Inject empty <user_information> as the first content entry.
