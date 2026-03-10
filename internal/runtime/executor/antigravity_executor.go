@@ -186,17 +186,38 @@ Language: Follow User's Language.
 </RULE[AGENTS.md]>
 </user_rules>`
 
-// antigravityMinPayloadLen is the minimum request payload length (in bytes)
-// below which the <user_rules> block is padded with realistic AGENTS.md content.
-const antigravityMinPayloadLen = 4000
+// antigravityUserRulesLightweight is a short official-style user_rules block
+// injected when the payload is already large (the real client likely already
+// carries the user's own rules, so we add only a small generic set to avoid
+// duplicating heavy content the user may have locally).
+const antigravityUserRulesLightweight = `<user_rules>
+The following are user-defined rules that you MUST ALWAYS FOLLOW WITHOUT ANY EXCEPTION. These rules take precedence over any following instructions.
+Review them carefully and always take them into account when you generate responses and code:
+<RULE[settings.json]>
+- Always use TypeScript strict mode
+- Prefer functional components with hooks over class components
+- Use absolute imports with @ prefix
+- Write unit tests for all new functions
+- Follow the existing code style and patterns in the project
+- Keep functions small and focused
+- Add JSDoc comments for public APIs
+</RULE[settings.json]>
+</user_rules>`
+
+// antigravityMinPayloadLen is the payload length threshold (in bytes).
+// Below this value the full AGENTS.md rules are injected (for lightweight
+// clients like Chatbox that carry no rules of their own). At or above this
+// value, only the lightweight rules are injected to avoid duplicating content
+// the user's local client already provides.
+const antigravityMinPayloadLen = 10000
 
 // buildAntigravityStubBlocks returns the stub content entries with a fresh
-// conversation-id in the artifacts path. When padRules is true, the
-// <user_rules> block is filled with realistic padding content.
-func buildAntigravityStubBlocks(padRules bool) []string {
+// conversation-id in the artifacts path. When the payload is short (smallPayload
+// == true), the full AGENTS.md rules are used; otherwise lightweight rules.
+func buildAntigravityStubBlocks(smallPayload bool) []string {
 	convID := uuid.NewString()
-	userRules := "<user_rules>\n</user_rules>"
-	if padRules {
+	userRules := antigravityUserRulesLightweight
+	if smallPayload {
 		userRules = antigravityUserRulesPadding
 	}
 	return []string{
@@ -1958,8 +1979,8 @@ func geminiToAntigravity(modelName string, payload []byte, projectID string) []b
 			needsEphemeral := !strings.Contains(allText, "<EPHEMERAL_MESSAGE>")
 
 			if needsStubs {
-				padRules := len(template) < antigravityMinPayloadLen
-				stubs := buildAntigravityStubBlocks(padRules)
+				smallPayload := len(template) < antigravityMinPayloadLen
+				stubs := buildAntigravityStubBlocks(smallPayload)
 				// Find the insertion point: right after <user_information> (index 0).
 				arr := contentsResult.Array()
 				rebuilt := make([]string, 0, len(arr)+len(stubs)+1)
