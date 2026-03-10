@@ -49,20 +49,84 @@ const (
 	antigravityAuthType            = "antigravity"
 	refreshSkew                    = 3000 * time.Second
 
-	// antigravityIdentityPrefix is the Antigravity system identity injected into
-	// systemInstruction to match genuine client fingerprint.
+	// antigravityIdentityPrefix is the Antigravity system identity and generic
+	// sections injected into systemInstruction to match genuine client fingerprint.
 	antigravityIdentityPrefix = `<identity>
 You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.
 You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.
 The USER will send you requests, which you must always prioritize addressing. Along with each USER request, we will attach additional metadata about their current state, such as what files they have open and where their cursor is.
 This information may or may not be relevant to the coding task, it is up for you to decide.
-</identity>`
+</identity>
+<tool_calling>
+Call tools as you normally would. The following list provides additional guidance to help you avoid errors:   - **Absolute paths only**. When using tools that accept file path arguments, ALWAYS use the absolute file path.
+</tool_calling>
+<ephemeral_message>
+There will be an <EPHEMERAL_MESSAGE> appearing in the conversation at times. This is not coming from the user, but instead injected by the system as important information to pay attention to. 
+Do not respond to nor acknowledge those messages, but do follow them strictly.
+</ephemeral_message>
+<artifacts>
+Artifacts are special markdown documents that you can create to present structured information to the user.
+All artifacts should be written to the artifact directory. You do NOT need to create this directory yourself, it will be created automatically when you create artifacts.
+</artifacts>
+<skills>
+You can use specialized 'skills' to help you with complex tasks. Each skill has a name and a description listed below.
+Skills are folders of instructions, scripts, and resources that extend your capabilities for specialized tasks. Each skill folder contains:
+- **SKILL.md** (required): The main instruction file with YAML frontmatter (name, description) and detailed markdown instructions
+If a skill seems relevant to your current task, you MUST use the view_file tool on the SKILL.md file to read its full instructions before proceeding. Once you have read the instructions, follow them exactly as documented.
+</skills>
+<communication_style>
+- **Formatting**. Format your responses in github-style markdown to make your responses easier for the USER to parse. Use headers to organize your responses and bolded or italicized text to highlight important keywords. Use backticks to format file, directory, function, and class names.
+- **Proactiveness**. As an agent, you are allowed to be proactive, but only in the course of completing the user's task.
+- **Helpfulness**. Respond like a helpful software engineer who is explaining your work to a friendly collaborator on the project. Acknowledge mistakes or any backtracking you do as a result of new information.
+- **Ask for clarification**. If you are unsure about the USER's intent, always ask for clarification rather than making assumptions.
+</communication_style>`
 
-	// antigravityUserInfoBlock is an empty user_information block injected as
+	// antigravityUserInfoBlock is the user_information block injected as
 	// the first contents entry to match genuine client request structure.
 	antigravityUserInfoBlock = `<user_information>
+The USER's OS version is mac.
 </user_information>`
+
+	// antigravityDefaultGenerationConfig is the default generationConfig matching
+	// the genuine Antigravity client. Injected when the field is absent.
+	antigravityDefaultGenerationConfig = `{"temperature":0.4,"topP":1,"topK":50,"candidateCount":1,"maxOutputTokens":16384,"stopSequences":["<|user|>","<|bot|>","<|context_request|>","<|endoftext|>","<|end_of_turn|>"]}`
+
+	// antigravityEphemeralSuffix is the ephemeral system message appended as
+	// the last content entry to match genuine client trailing structure.
+	// Prefixed with "Step Id:" and includes the full artifact/task reminders
+	// that the genuine Antigravity client injects.
+	antigravityEphemeralSuffix = `The following is an <EPHEMERAL_MESSAGE> not actually sent by the user. It is provided by the system as a set of reminders and general important information to pay attention to. Do NOT respond to this message, just act accordingly.
+
+<EPHEMERAL_MESSAGE>
+<artifact_reminder>
+You have not yet created any artifacts. Please follow the artifact guidelines and create them as needed based on the task.
+CRITICAL REMINDER: remember that user-facing artifacts should be AS CONCISE AS POSSIBLE. Keep this in mind when editing artifacts.
+</artifact_reminder>
+<no_active_task_reminder>
+You are currently not in a task because: a task boundary has never been set yet in this conversation.
+If there is no obvious task from the user or if you are just conversing, then it is acceptable to not have a task set. If you are just handling simple one-off requests, such as explaining a single file, or making one or two ad-hoc code edit requests, or making an obvious refactoring request such as renaming or moving code into a helper function, it is also acceptable to not have a task set.
+Otherwise, you should use the task_boundary tool to set a task if there is one evident.
+Since you are NOT in an active task section, DO NOT call the notify_user tool unless you are requesting review of files.
+</no_active_task_reminder>
+</EPHEMERAL_MESSAGE>`
 )
+
+// antigravityStubWorkflows is the workflows content block matching the
+// genuine Antigravity client structure.
+const antigravityStubWorkflows = `<workflows>
+You have the ability to use and create workflows, which are well-defined steps on how to achieve a particular thing. These workflows are defined as .md files in {.agents,.agent,_agents,_agent}/workflows.
+</workflows>`
+
+// buildAntigravityStubBlocks returns the stub content entries with a fresh
+// conversation-id in the artifacts path.
+func buildAntigravityStubBlocks() []string {
+	convID := uuid.NewString()
+	return []string{
+		"<artifacts>\nArtifact Directory Path: /tmp/.gemini/antigravity/brain/" + convID + "\n</artifacts>",
+		antigravityStubWorkflows,
+		"<user_rules>\n</user_rules>",
+	}
+}
 
 var (
 	randSource      = rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -1804,6 +1868,82 @@ func geminiToAntigravity(modelName string, payload []byte, projectID string) []b
 				}
 				template, _ = sjson.SetRaw(template, "request.contents", newContents)
 			}
+		}
+
+		// Inject stub content blocks (<artifacts>, <workflows>, <user_rules>)
+		// after <user_information> but before the real user messages, plus
+		// an ephemeral suffix at the end, to match genuine client structure.
+		contentsResult := gjson.Get(template, "request.contents")
+		if contentsResult.Exists() && contentsResult.IsArray() {
+			allText := contentsResult.Raw
+			needsStubs := !strings.Contains(allText, "<workflows>")
+			needsEphemeral := !strings.Contains(allText, "<EPHEMERAL_MESSAGE>")
+
+			if needsStubs {
+				stubs := buildAntigravityStubBlocks()
+				// Find the insertion point: right after <user_information> (index 0).
+				arr := contentsResult.Array()
+				rebuilt := make([]string, 0, len(arr)+len(stubs)+1)
+				rebuilt = append(rebuilt, arr[0].Raw) // <user_information>
+				for _, stub := range stubs {
+					escaped := strings.ReplaceAll(stub, "\n", `\n`)
+					escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+					rebuilt = append(rebuilt, `{"role":"user","parts":[{"text":"`+escaped+`"}]}`)
+				}
+				for i := 1; i < len(arr); i++ {
+					rebuilt = append(rebuilt, arr[i].Raw)
+				}
+				template, _ = sjson.SetRaw(template, "request.contents", "["+strings.Join(rebuilt, ",")+"]")
+			}
+
+			// Wrap bare user messages with Step Id + <USER_REQUEST> + <ADDITIONAL_METADATA>.
+			updatedContents := gjson.Get(template, "request.contents")
+			if updatedContents.Exists() && updatedContents.IsArray() {
+				stepID := 0
+				for i, entry := range updatedContents.Array() {
+					text := entry.Get("parts.0.text").String()
+					if text == "" || entry.Get("role").String() != "user" {
+						continue
+					}
+					// Skip our injected structural blocks.
+					if strings.HasPrefix(text, "<user_information>") ||
+						strings.HasPrefix(text, "<artifacts>") ||
+						strings.HasPrefix(text, "<workflows>") ||
+						strings.HasPrefix(text, "<user_rules>") ||
+						strings.HasPrefix(text, "Step Id:") ||
+						strings.Contains(text, "<EPHEMERAL_MESSAGE>") {
+						continue
+					}
+					wrapped := fmt.Sprintf("Step Id: %d\n\n<USER_REQUEST>\n%s\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nThe current local time is: %s. This is the latest source of truth for time; do not attempt to get the time any other way.\n</ADDITIONAL_METADATA>",
+						stepID, text, time.Now().Format("2006-01-02T15:04:05-07:00"))
+					template, _ = sjson.Set(template, fmt.Sprintf("request.contents.%d.parts.0.text", i), wrapped)
+					stepID++
+				}
+			}
+
+			if needsEphemeral {
+				// Use the next Step Id after the last user message.
+				updatedContents2 := gjson.Get(template, "request.contents")
+				ephStepID := 0
+				if updatedContents2.Exists() && updatedContents2.IsArray() {
+					for _, entry := range updatedContents2.Array() {
+						text := entry.Get("parts.0.text").String()
+						if strings.HasPrefix(text, "Step Id:") {
+							ephStepID++
+						}
+					}
+				}
+				ephText := fmt.Sprintf("Step Id: %d\n%s", ephStepID, antigravityEphemeralSuffix)
+				escaped := strings.ReplaceAll(ephText, "\n", `\n`)
+				escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+				entry := `{"role":"user","parts":[{"text":"` + escaped + `"}]}`
+				template, _ = sjson.SetRaw(template, "request.contents.-1", entry)
+			}
+		}
+
+		// Inject default generationConfig when absent to match genuine client fingerprint.
+		if !gjson.Get(template, "request.generationConfig").Exists() {
+			template, _ = sjson.SetRaw(template, "request.generationConfig", antigravityDefaultGenerationConfig)
 		}
 	}
 

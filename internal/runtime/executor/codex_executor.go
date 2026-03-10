@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	codexauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/codex"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
@@ -140,6 +140,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		AuthType:  authType,
 		AuthValue: authValue,
 	})
+	compressZstdBody(httpReq)
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
 	httpResp, err := httpClient.Do(httpReq)
 	if err != nil {
@@ -244,6 +245,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 		AuthType:  authType,
 		AuthValue: authValue,
 	})
+	compressZstdBody(httpReq)
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
 	httpResp, err := httpClient.Do(httpReq)
 	if err != nil {
@@ -340,6 +342,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		AuthValue: authValue,
 	})
 
+	compressZstdBody(httpReq)
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
 	httpResp, err := httpClient.Do(httpReq)
 	if err != nil {
@@ -645,8 +648,8 @@ func applyCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, token string, s
 		ginHeaders = ginCtx.Request.Header
 	}
 
-	misc.EnsureHeader(r.Header, ginHeaders, "Version", codexClientVersion)
-	misc.EnsureHeader(r.Header, ginHeaders, "User-Agent", codexUserAgent)
+	r.Header.Set("Version", codexClientVersion)
+	r.Header.Set("User-Agent", codexUserAgent)
 
 	// Use raw map access to bypass Go's Title-Casing for session_id
 	if ginHeaders != nil {
@@ -766,4 +769,32 @@ func (e *CodexExecutor) resolveCodexConfig(auth *cliproxyauth.Auth) *config.Code
 		}
 	}
 	return nil
+}
+
+func compressZstdBody(r *http.Request) {
+	if r == nil || r.Body == nil {
+		return
+	}
+	raw, err := io.ReadAll(r.Body)
+	if err != nil || len(raw) == 0 {
+		return
+	}
+	var buf bytes.Buffer
+	enc, err := zstd.NewWriter(&buf, zstd.WithEncoderLevel(zstd.SpeedDefault))
+	if err != nil {
+		r.Body = io.NopCloser(bytes.NewReader(raw))
+		return
+	}
+	if _, err := enc.Write(raw); err != nil {
+		enc.Close()
+		r.Body = io.NopCloser(bytes.NewReader(raw))
+		return
+	}
+	if err := enc.Close(); err != nil {
+		r.Body = io.NopCloser(bytes.NewReader(raw))
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(buf.Bytes()))
+	r.ContentLength = int64(buf.Len())
+	r.Header.Set("Content-Encoding", "zstd")
 }
