@@ -2191,31 +2191,56 @@ func generateStableRequestID(payload []byte) string {
 
 func getStableConversationText(payload []byte) string {
 	contents := gjson.GetBytes(payload, "request.contents")
-	if contents.IsArray() {
-		for _, content := range contents.Array() {
-			if content.Get("role").String() == "user" {
-				parts := content.Get("parts")
-				if parts.IsArray() {
-					for _, part := range parts.Array() {
-						text := part.Get("text").String()
-						if text != "" &&
-							!strings.HasPrefix(text, "<user_information>") &&
-							!strings.HasPrefix(text, "<artifacts>") &&
-							!strings.HasPrefix(text, "<workflows>") &&
-							!strings.HasPrefix(text, "<user_rules>") {
-
-							startMarker := "<USER_REQUEST>\n"
-							endMarker := "\n</USER_REQUEST>"
-							startIdx := strings.Index(text, startMarker)
-							endIdx := strings.Index(text, endMarker)
-							if startIdx != -1 && endIdx != -1 {
-								return text[startIdx+len(startMarker) : endIdx]
-							}
-							return text
-						}
-					}
-				}
+	if !contents.IsArray() {
+		return ""
+	}
+	for _, content := range contents.Array() {
+		if content.Get("role").String() != "user" {
+			continue
+		}
+		parts := content.Get("parts")
+		if !parts.IsArray() {
+			continue
+		}
+		// Collect all candidate texts from the first user content.
+		// Claude Code packs system-reminders, local-command metadata,
+		// and the actual user message into one content entry; the real
+		// message is always the last text part.
+		var candidates []string
+		for _, part := range parts.Array() {
+			text := part.Get("text").String()
+			if text == "" {
+				continue
 			}
+			// Skip known metadata prefixes injected by the executor.
+			if strings.HasPrefix(text, "<user_information>") ||
+				strings.HasPrefix(text, "<artifacts>") ||
+				strings.HasPrefix(text, "<workflows>") ||
+				strings.HasPrefix(text, "<user_rules>") {
+				continue
+			}
+			// Skip Claude Code system-reminders and local-command blocks.
+			if strings.HasPrefix(text, "<system-reminder>") ||
+				strings.HasPrefix(text, "<local-command-caveat>") ||
+				strings.HasPrefix(text, "<local-command-stdout>") ||
+				strings.HasPrefix(text, "<command-name>") {
+				continue
+			}
+			// Try to extract the user request from <USER_REQUEST> wrapper
+			// (present in Gemini/Antigravity native paths).
+			start := "<USER_REQUEST>\n"
+			end := "\n</USER_REQUEST>"
+			si := strings.Index(text, start)
+			ei := strings.Index(text, end)
+			if si != -1 && ei != -1 {
+				return text[si+len(start) : ei]
+			}
+			candidates = append(candidates, text)
+		}
+		// Return the last candidate — in Claude Code requests the actual
+		// user message is the final text part after all system metadata.
+		if len(candidates) > 0 {
+			return candidates[len(candidates)-1]
 		}
 	}
 	return ""
