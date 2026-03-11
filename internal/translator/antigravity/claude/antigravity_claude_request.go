@@ -292,7 +292,12 @@ func ConvertClaudeRequestToAntigravity(modelName string, inputRawJSON []byte, _ 
 
 							partJSON := `{}`
 							partJSON, _ = sjson.SetRaw(partJSON, "functionResponse", functionResponseJSON)
-							clientContentJSON, _ = sjson.SetRaw(clientContentJSON, "parts.-1", partJSON)
+							// Emit functionResponse as a separate "model" role content node
+							// to match genuine Antigravity client behavior.
+							frContentJSON := `{"role":"model","parts":[]}`
+							frContentJSON, _ = sjson.SetRaw(frContentJSON, "parts.-1", partJSON)
+							contentsJSON, _ = sjson.SetRaw(contentsJSON, "-1", frContentJSON)
+							hasContents = true
 						}
 					} else if contentTypeResult.Type == gjson.String && contentTypeResult.String() == "image" {
 						sourceResult := contentResult.Get("source")
