@@ -2066,22 +2066,20 @@ func geminiToAntigravity(modelName string, payload []byte, projectID string) []b
 						continue
 					}
 
-					// Calculate progressive simulated time
+					// Calculate progressive simulated time per step.
+					// Cache key includes stepID so each step gets its own stable timestamp.
 					simulatedTime := time.Now()
 					if sessionKey != "" {
-						val, loaded := sessionTimeCache.LoadOrStore(sessionKey, &antigravitySessionTimeEntry{
+						stepKey := fmt.Sprintf("%s:%d", sessionKey, stepID)
+						val, loaded := sessionTimeCache.LoadOrStore(stepKey, &antigravitySessionTimeEntry{
 							baseTime:      time.Now(),
 							lastAccessSys: time.Now(),
 						})
 						entryPtr := val.(*antigravitySessionTimeEntry)
 						if loaded {
 							entryPtr.lastAccessSys = time.Now()
-							// The user specifically requested that the time injected remain exactly identical
-							// to the initial time for all subsequent requests in this session footprint.
-							simulatedTime = entryPtr.baseTime
-						} else {
-							simulatedTime = entryPtr.baseTime
 						}
+						simulatedTime = entryPtr.baseTime
 					}
 
 					wrapped := fmt.Sprintf("Step Id: %d\n\n<USER_REQUEST>\n%s\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nThe current local time is: %s. This is the latest source of truth for time; do not attempt to get the time any other way.\n</ADDITIONAL_METADATA>",
