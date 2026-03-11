@@ -227,9 +227,19 @@ func buildAntigravityStubBlocks(smallPayload bool) []string {
 	}
 }
 
+type antigravitySessionTimeEntry struct {
+	baseTime      time.Time
+	lastAccessSys time.Time
+}
+
 var (
 	randSource      = rand.New(rand.NewSource(time.Now().UnixNano()))
 	randSourceMutex sync.Mutex
+
+	// sessionTimeCache maps steady SessionUUIDs string -> *antigravitySessionTimeEntry
+	// This helps inject logical and consistent time metadata per session.
+	sessionTimeCache sync.Map
+
 	// antigravityPrimaryModelsCache keeps the latest non-empty model list fetched
 	// from any antigravity auth. Empty fetches never overwrite this cache.
 	antigravityPrimaryModelsCache struct {
@@ -237,6 +247,23 @@ var (
 		models []*registry.ModelInfo
 	}
 )
+
+func init() {
+	// Start cleanup goroutine for sessionTimeCache every 30 mins
+	go func() {
+		for {
+			time.Sleep(30 * time.Minute)
+			now := time.Now()
+			sessionTimeCache.Range(func(key, value interface{}) bool {
+				entry, ok := value.(*antigravitySessionTimeEntry)
+				if ok && now.Sub(entry.lastAccessSys) > 24*time.Hour {
+					sessionTimeCache.Delete(key)
+				}
+				return true
+			})
+		}
+	}()
+}
 
 func cloneAntigravityModels(models []*registry.ModelInfo) []*registry.ModelInfo {
 	if len(models) == 0 {
@@ -1930,7 +1957,7 @@ func geminiToAntigravity(modelName string, payload []byte, projectID string) []b
 	if isImageModel {
 		template, _ = sjson.Set(template, "requestId", generateImageGenRequestID())
 	} else {
-		template, _ = sjson.Set(template, "requestId", generateRequestID())
+		template, _ = sjson.Set(template, "requestId", generateStableRequestID(payload))
 		template, _ = sjson.Set(template, "request.sessionId", generateStableSessionID(payload))
 	}
 
@@ -2006,6 +2033,14 @@ func geminiToAntigravity(modelName string, payload []byte, projectID string) []b
 			// Wrap bare user messages with Step Id + <USER_REQUEST> + <ADDITIONAL_METADATA>.
 			updatedContents := gjson.Get(template, "request.contents")
 			if updatedContents.Exists() && updatedContents.IsArray() {
+				// Establish anchor times by extracting session string early
+				stableSession := getStableConversationText(payload)
+				var sessionKey string
+				if stableSession != "" {
+					sessionHash := sha256.Sum256([]byte(stableSession))
+					sessionKey = fmt.Sprintf("%08x", sessionHash[0:4])
+				}
+
 				stepID := 0
 				for i, entry := range updatedContents.Array() {
 					text := entry.Get("parts.0.text").String()
@@ -2021,8 +2056,27 @@ func geminiToAntigravity(modelName string, payload []byte, projectID string) []b
 						strings.Contains(text, "<EPHEMERAL_MESSAGE>") {
 						continue
 					}
+
+					// Calculate progressive simulated time
+					simulatedTime := time.Now()
+					if sessionKey != "" {
+						val, loaded := sessionTimeCache.LoadOrStore(sessionKey, &antigravitySessionTimeEntry{
+							baseTime:      time.Now(),
+							lastAccessSys: time.Now(),
+						})
+						entryPtr := val.(*antigravitySessionTimeEntry)
+						if loaded {
+							entryPtr.lastAccessSys = time.Now()
+							// The user specifically requested that the time injected remain exactly identical
+							// to the initial time for all subsequent requests in this session footprint.
+							simulatedTime = entryPtr.baseTime
+						} else {
+							simulatedTime = entryPtr.baseTime
+						}
+					}
+
 					wrapped := fmt.Sprintf("Step Id: %d\n\n<USER_REQUEST>\n%s\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nThe current local time is: %s. This is the latest source of truth for time; do not attempt to get the time any other way.\n</ADDITIONAL_METADATA>",
-						stepID, text, time.Now().Format("2006-01-02T15:04:05-07:00"))
+						stepID, text, simulatedTime.Format("2006-01-02T15:04:05-07:00"))
 					template, _ = sjson.Set(template, fmt.Sprintf("request.contents.%d.parts.0.text", i), wrapped)
 					stepID++
 				}
@@ -2031,20 +2085,40 @@ func geminiToAntigravity(modelName string, payload []byte, projectID string) []b
 			if needsEphemeral {
 				// Use the next Step Id after the last user message.
 				updatedContents2 := gjson.Get(template, "request.contents")
+
+				isLastItemToolRelated := false
 				ephStepID := 0
+
 				if updatedContents2.Exists() && updatedContents2.IsArray() {
-					for _, entry := range updatedContents2.Array() {
+					arr := updatedContents2.Array()
+					if len(arr) > 0 {
+						lastItem := arr[len(arr)-1]
+						parts := lastItem.Get("parts")
+						if parts.IsArray() {
+							for _, p := range parts.Array() {
+								if p.Get("functionCall").Exists() || p.Get("functionResponse").Exists() {
+									isLastItemToolRelated = true
+									break
+								}
+							}
+						}
+					}
+
+					for _, entry := range arr {
 						text := entry.Get("parts.0.text").String()
 						if strings.HasPrefix(text, "Step Id:") {
 							ephStepID++
 						}
 					}
 				}
-				ephText := fmt.Sprintf("Step Id: %d\n%s", ephStepID, antigravityEphemeralSuffix)
-				escaped := strings.ReplaceAll(ephText, "\n", `\n`)
-				escaped = strings.ReplaceAll(escaped, `"`, `\"`)
-				entry := `{"role":"user","parts":[{"text":"` + escaped + `"}]}`
-				template, _ = sjson.SetRaw(template, "request.contents.-1", entry)
+
+				if !isLastItemToolRelated {
+					ephText := fmt.Sprintf("Step Id: %d\n%s", ephStepID, antigravityEphemeralSuffix)
+					escaped := strings.ReplaceAll(ephText, "\n", `\n`)
+					escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+					entry := `{"role":"user","parts":[{"text":"` + escaped + `"}]}`
+					template, _ = sjson.SetRaw(template, "request.contents.-1", entry)
+				}
 			}
 		}
 
@@ -2076,8 +2150,68 @@ func geminiToAntigravity(modelName string, payload []byte, projectID string) []b
 	return []byte(template)
 }
 
-func generateRequestID() string {
-	return fmt.Sprintf("agent/%d/%s/0", time.Now().UnixMilli(), uuid.NewString())
+func generateStableRequestID(payload []byte) string {
+	timestamp := time.Now().UnixMilli()
+
+	contents := gjson.GetBytes(payload, "request.contents")
+	sequenceNum := 0
+
+	if contents.IsArray() {
+		for _, content := range contents.Array() {
+			parts := content.Get("parts")
+			if parts.IsArray() {
+				// Random increment between 1 and 5 per part to evade precision-based quota
+				randSourceMutex.Lock()
+				for i := 0; i < len(parts.Array()); i++ {
+					sequenceNum += randSource.Intn(5) + 1
+				}
+				randSourceMutex.Unlock()
+			}
+		}
+	}
+
+	stableText := getStableConversationText(payload)
+
+	stableUUID := uuid.NewString() // Default fallback
+	if stableText != "" {
+		hash := sha256.Sum256([]byte(stableText))
+		stableUUID = fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+			hash[0:4], hash[4:6], hash[6:8], hash[8:10], hash[10:16])
+	}
+
+	return fmt.Sprintf("agent/%d/%s/%d", timestamp, stableUUID, sequenceNum)
+}
+
+func getStableConversationText(payload []byte) string {
+	contents := gjson.GetBytes(payload, "request.contents")
+	if contents.IsArray() {
+		for _, content := range contents.Array() {
+			if content.Get("role").String() == "user" {
+				parts := content.Get("parts")
+				if parts.IsArray() {
+					for _, part := range parts.Array() {
+						text := part.Get("text").String()
+						if text != "" &&
+							!strings.HasPrefix(text, "<user_information>") &&
+							!strings.HasPrefix(text, "<artifacts>") &&
+							!strings.HasPrefix(text, "<workflows>") &&
+							!strings.HasPrefix(text, "<user_rules>") {
+
+							startMarker := "<USER_REQUEST>\n"
+							endMarker := "\n</USER_REQUEST>"
+							startIdx := strings.Index(text, startMarker)
+							endIdx := strings.Index(text, endMarker)
+							if startIdx != -1 && endIdx != -1 {
+								return text[startIdx+len(startMarker) : endIdx]
+							}
+							return text
+						}
+					}
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func generateImageGenRequestID() string {
@@ -2092,18 +2226,11 @@ func generateSessionID() string {
 }
 
 func generateStableSessionID(payload []byte) string {
-	contents := gjson.GetBytes(payload, "request.contents")
-	if contents.IsArray() {
-		for _, content := range contents.Array() {
-			if content.Get("role").String() == "user" {
-				text := content.Get("parts.0.text").String()
-				if text != "" {
-					h := sha256.Sum256([]byte(text))
-					n := int64(binary.BigEndian.Uint64(h[:8])) & 0x7FFFFFFFFFFFFFFF
-					return "-" + strconv.FormatInt(n, 10)
-				}
-			}
-		}
+	text := getStableConversationText(payload)
+	if text != "" {
+		h := sha256.Sum256([]byte(text))
+		n := int64(binary.BigEndian.Uint64(h[:8])) & 0x7FFFFFFFFFFFFFFF
+		return "-" + strconv.FormatInt(n, 10)
 	}
 	return generateSessionID()
 }
