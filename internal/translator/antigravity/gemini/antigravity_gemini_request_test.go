@@ -118,7 +118,7 @@ func TestFixCLIToolResponse_PreservesFunctionResponseParts(t *testing.T) {
 							"functionResponse": {
 								"id": "tool-001",
 								"name": "screenshot",
-								"response": {"result": "Screenshot taken"},
+								"response": {"output": "Screenshot taken"},
 								"parts": [
 									{"inlineData": {"mimeType": "image/png", "data": "iVBOR"}}
 								]
@@ -166,8 +166,8 @@ func TestFixCLIToolResponse_PreservesFunctionResponseParts(t *testing.T) {
 		t.Errorf("Expected data 'iVBOR', got '%s'", inlineParts[0].Get("inlineData.data").String())
 	}
 
-	// Verify response.result is also preserved
-	if funcResp.Get("response.result").String() != "Screenshot taken" {
-		t.Errorf("Expected response.result 'Screenshot taken', got '%s'", funcResp.Get("response.result").String())
+	// Verify response.output is also preserved
+	if funcResp.Get("response.output").String() != "Screenshot taken" {
+		t.Errorf("Expected response.output 'Screenshot taken', got '%s'", funcResp.Get("response.output").String())
 	}
 }

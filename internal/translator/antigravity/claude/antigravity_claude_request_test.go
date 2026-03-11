@@ -733,9 +733,9 @@ func TestConvertClaudeRequestToAntigravity_ToolResultNoContent(t *testing.T) {
 	}
 
 	// Verify the functionResponse has a valid result value
-	fr := gjson.Get(outputStr, "request.contents.1.parts.0.functionResponse.response.result")
+	fr := gjson.Get(outputStr, "request.contents.1.parts.0.functionResponse.response.output")
 	if !fr.Exists() {
-		t.Error("functionResponse.response.result should exist")
+		t.Error("functionResponse.response.output should exist")
 	}
 }
 
@@ -822,10 +822,10 @@ func TestConvertClaudeRequestToAntigravity_ToolResultWithImage(t *testing.T) {
 		t.Fatal("functionResponse should exist")
 	}
 
-	// Text content should be in response.result
-	resultText := funcResp.Get("response.result.text").String()
+	// Text content should be in response.output
+	resultText := funcResp.Get("response.output.text").String()
 	if resultText != "File content here" {
-		t.Errorf("Expected response.result.text = 'File content here', got '%s'", resultText)
+		t.Errorf("Expected response.output.text = 'File content here', got '%s'", resultText)
 	}
 
 	// Image should be in functionResponse.parts[0].inlineData
@@ -885,9 +885,9 @@ func TestConvertClaudeRequestToAntigravity_ToolResultWithSingleImage(t *testing.
 		t.Fatal("functionResponse should exist")
 	}
 
-	// response.result should be empty (image only)
-	if funcResp.Get("response.result").String() != "" {
-		t.Errorf("Expected empty response.result for image-only content, got '%s'", funcResp.Get("response.result").String())
+	// response.output should be empty (image only)
+	if funcResp.Get("response.output").String() != "" {
+		t.Errorf("Expected empty response.output for image-only content, got '%s'", funcResp.Get("response.output").String())
 	}
 
 	// Image should be in functionResponse.parts[0].inlineData
@@ -908,7 +908,7 @@ func TestConvertClaudeRequestToAntigravity_ToolResultWithSingleImage(t *testing.
 
 func TestConvertClaudeRequestToAntigravity_ToolResultWithMultipleImagesAndTexts(t *testing.T) {
 	// tool_result with array content: 2 text items + 2 images
-	// All images go into functionResponse.parts, texts into response.result array
+	// All images go into functionResponse.parts, texts into response.output array
 	inputJSON := []byte(`{
 		"model": "claude-3-5-sonnet-20240620",
 		"messages": [
@@ -948,10 +948,10 @@ func TestConvertClaudeRequestToAntigravity_ToolResultWithMultipleImagesAndTexts(
 		t.Fatal("functionResponse should exist")
 	}
 
-	// Multiple text items => response.result is an array
-	resultArr := funcResp.Get("response.result")
+	// Multiple text items => response.output is an array
+	resultArr := funcResp.Get("response.output")
 	if !resultArr.IsArray() {
-		t.Fatalf("Expected response.result to be an array, got: %s", resultArr.Raw)
+		t.Fatalf("Expected response.output to be an array, got: %s", resultArr.Raw)
 	}
 	results := resultArr.Array()
 	if len(results) != 2 {
@@ -984,7 +984,7 @@ func TestConvertClaudeRequestToAntigravity_ToolResultWithMultipleImagesAndTexts(
 }
 
 func TestConvertClaudeRequestToAntigravity_ToolResultWithOnlyMultipleImages(t *testing.T) {
-	// tool_result with only images (no text) — response.result should be empty string
+	// tool_result with only images (no text) — response.output should be empty string
 	inputJSON := []byte(`{
 		"model": "claude-3-5-sonnet-20240620",
 		"messages": [
@@ -1022,9 +1022,9 @@ func TestConvertClaudeRequestToAntigravity_ToolResultWithOnlyMultipleImages(t *t
 		t.Fatal("functionResponse should exist")
 	}
 
-	// No text => response.result should be empty string
-	if funcResp.Get("response.result").String() != "" {
-		t.Errorf("Expected empty response.result, got '%s'", funcResp.Get("response.result").String())
+	// No text => response.output should be empty string
+	if funcResp.Get("response.output").String() != "" {
+		t.Errorf("Expected empty response.output, got '%s'", funcResp.Get("response.output").String())
 	}
 
 	// Both images in functionResponse.parts
@@ -1084,9 +1084,9 @@ func TestConvertClaudeRequestToAntigravity_ToolResultImageNotBase64(t *testing.T
 
 	// Non-base64 image is treated as non-image, so it goes into the filtered results
 	// along with the text item. Since there are 2 non-image items, result is array.
-	resultArr := funcResp.Get("response.result")
+	resultArr := funcResp.Get("response.output")
 	if !resultArr.IsArray() {
-		t.Fatalf("Expected response.result to be an array (2 non-image items), got: %s", resultArr.Raw)
+		t.Fatalf("Expected response.output to be an array (2 non-image items), got: %s", resultArr.Raw)
 	}
 	results := resultArr.Array()
 	if len(results) != 2 {

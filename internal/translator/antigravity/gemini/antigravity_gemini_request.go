@@ -150,17 +150,17 @@ func parseFunctionResponseRaw(response gjson.Result) string {
 	log.Debugf("parse function response failed, using fallback")
 	funcResp := response.Get("functionResponse")
 	if funcResp.Exists() {
-		fr := `{"functionResponse":{"name":"","response":{"result":""}}}`
+		fr := `{"functionResponse":{"name":"","response":{"output":""}}}`
 		fr, _ = sjson.Set(fr, "functionResponse.name", funcResp.Get("name").String())
-		fr, _ = sjson.Set(fr, "functionResponse.response.result", funcResp.Get("response").String())
+		fr, _ = sjson.Set(fr, "functionResponse.response.output", funcResp.Get("response").String())
 		if id := funcResp.Get("id").String(); id != "" {
 			fr, _ = sjson.Set(fr, "functionResponse.id", id)
 		}
 		return fr
 	}
 
-	fr := `{"functionResponse":{"name":"unknown","response":{"result":""}}}`
-	fr, _ = sjson.Set(fr, "functionResponse.response.result", response.String())
+	fr := `{"functionResponse":{"name":"unknown","response":{"output":""}}}`
+	fr, _ = sjson.Set(fr, "functionResponse.response.output", response.String())
 	return fr
 }
 

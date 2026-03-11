@@ -220,7 +220,7 @@ func ConvertClaudeRequestToAntigravity(modelName string, inputRawJSON []byte, _ 
 							responseData := ""
 							if functionResponseResult.Type == gjson.String {
 								responseData = functionResponseResult.String()
-								functionResponseJSON, _ = sjson.Set(functionResponseJSON, "response.result", responseData)
+								functionResponseJSON, _ = sjson.Set(functionResponseJSON, "response.output", responseData)
 							} else if functionResponseResult.IsArray() {
 								frResults := functionResponseResult.Array()
 								nonImageCount := 0
@@ -249,11 +249,11 @@ func ConvertClaudeRequestToAntigravity(modelName string, inputRawJSON []byte, _ 
 								}
 
 								if nonImageCount == 1 {
-									functionResponseJSON, _ = sjson.SetRaw(functionResponseJSON, "response.result", lastNonImageRaw)
+									functionResponseJSON, _ = sjson.SetRaw(functionResponseJSON, "response.output", lastNonImageRaw)
 								} else if nonImageCount > 1 {
-									functionResponseJSON, _ = sjson.SetRaw(functionResponseJSON, "response.result", filteredJSON)
+									functionResponseJSON, _ = sjson.SetRaw(functionResponseJSON, "response.output", filteredJSON)
 								} else {
-									functionResponseJSON, _ = sjson.Set(functionResponseJSON, "response.result", "")
+									functionResponseJSON, _ = sjson.Set(functionResponseJSON, "response.output", "")
 								}
 
 								// Place image data inside functionResponse.parts as inlineData
@@ -278,16 +278,16 @@ func ConvertClaudeRequestToAntigravity(modelName string, inputRawJSON []byte, _ 
 									imagePartsJSON := "[]"
 									imagePartsJSON, _ = sjson.SetRaw(imagePartsJSON, "-1", imagePartJSON)
 									functionResponseJSON, _ = sjson.SetRaw(functionResponseJSON, "parts", imagePartsJSON)
-									functionResponseJSON, _ = sjson.Set(functionResponseJSON, "response.result", "")
+									functionResponseJSON, _ = sjson.Set(functionResponseJSON, "response.output", "")
 								} else {
-									functionResponseJSON, _ = sjson.SetRaw(functionResponseJSON, "response.result", functionResponseResult.Raw)
+									functionResponseJSON, _ = sjson.SetRaw(functionResponseJSON, "response.output", functionResponseResult.Raw)
 								}
 							} else if functionResponseResult.Raw != "" {
-								functionResponseJSON, _ = sjson.SetRaw(functionResponseJSON, "response.result", functionResponseResult.Raw)
+								functionResponseJSON, _ = sjson.SetRaw(functionResponseJSON, "response.output", functionResponseResult.Raw)
 							} else {
 								// Content field is missing entirely — .Raw is empty which
 								// causes sjson.SetRaw to produce invalid JSON (e.g. "result":}).
-								functionResponseJSON, _ = sjson.Set(functionResponseJSON, "response.result", "")
+								functionResponseJSON, _ = sjson.Set(functionResponseJSON, "response.output", "")
 							}
 
 							partJSON := `{}`
