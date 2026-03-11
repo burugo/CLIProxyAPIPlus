@@ -1716,6 +1716,15 @@ func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyau
 		payloadStr, _ = sjson.Delete(payloadStr, "request.generationConfig.maxOutputTokens")
 	}
 
+	// Undo Go's HTML-safe JSON escaping to match genuine JS-based client output.
+	// Go's encoding/json (used by sjson) escapes <, >, & but JavaScript's
+	// JSON.stringify does not, so the real Antigravity client sends raw chars.
+	payloadStr = strings.NewReplacer(
+		`\u003c`, `<`,
+		`\u003e`, `>`,
+		`\u0026`, `&`,
+	).Replace(payloadStr)
+
 	httpReq, errReq := http.NewRequestWithContext(ctx, http.MethodPost, requestURL.String(), strings.NewReader(payloadStr))
 	if errReq != nil {
 		return nil, errReq
