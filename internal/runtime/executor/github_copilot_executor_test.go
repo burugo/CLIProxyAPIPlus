@@ -331,6 +331,64 @@ func TestApplyHeaders_XInitiator_InputArrayLastFunctionCallOutput(t *testing.T) 
 	}
 }
 
+// --- Tests for subagent detection ---
+
+func TestApplyHeaders_XInitiator_ClaudeCodeSubagent(t *testing.T) {
+	t.Parallel()
+	e := &GitHubCopilotExecutor{}
+	req, _ := http.NewRequest(http.MethodPost, "https://example.com", nil)
+	body := []byte(`{"messages":[{"role":"system","content":"You are a file search specialist. READ-ONLY MODE - NO FILE MODIFICATIONS."},{"role":"user","content":"search for copilot"}]}`)
+	e.applyHeaders(req, "token", body)
+	if got := req.Header.Get("X-Initiator"); got != "agent" {
+		t.Fatalf("X-Initiator = %q, want agent (subagent detected)", got)
+	}
+}
+
+func TestApplyHeaders_XInitiator_ClaudeCodeSubagentArrayContent(t *testing.T) {
+	t.Parallel()
+	e := &GitHubCopilotExecutor{}
+	req, _ := http.NewRequest(http.MethodPost, "https://example.com", nil)
+	body := []byte(`{"messages":[{"role":"system","content":[{"type":"text","text":"You are Claude Code."},{"type":"text","text":"This is a READ-ONLY exploration task. Agent threads always have their cwd reset between bash calls."}]},{"role":"user","content":"hello"}]}`)
+	e.applyHeaders(req, "token", body)
+	if got := req.Header.Get("X-Initiator"); got != "agent" {
+		t.Fatalf("X-Initiator = %q, want agent (subagent with array content)", got)
+	}
+}
+
+func TestApplyHeaders_XInitiator_NormalUserWithSystem(t *testing.T) {
+	t.Parallel()
+	e := &GitHubCopilotExecutor{}
+	req, _ := http.NewRequest(http.MethodPost, "https://example.com", nil)
+	body := []byte(`{"messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"hello"}]}`)
+	e.applyHeaders(req, "token", body)
+	if got := req.Header.Get("X-Initiator"); got != "user" {
+		t.Fatalf("X-Initiator = %q, want user (normal request)", got)
+	}
+}
+
+func TestDetectSubagent_Positive(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"messages":[{"role":"system","content":"You are a file search specialist. READ-ONLY exploration task."},{"role":"user","content":"search"}]}`)
+	if !detectSubagent(body) {
+		t.Fatal("expected subagent to be detected")
+	}
+}
+
+func TestDetectSubagent_NegativeNoMarkers(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"messages":[{"role":"system","content":"You are a helpful coding assistant."},{"role":"user","content":"hello"}]}`)
+	if detectSubagent(body) {
+		t.Fatal("expected no subagent detection for normal system prompt")
+	}
+}
+
+func TestDetectSubagent_NegativeEmpty(t *testing.T) {
+	t.Parallel()
+	if detectSubagent(nil) {
+		t.Fatal("expected false for nil body")
+	}
+}
+
 // --- Tests for x-github-api-version header (Problem M) ---
 
 func TestApplyHeaders_GitHubAPIVersion(t *testing.T) {
