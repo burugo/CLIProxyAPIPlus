@@ -569,10 +569,10 @@ func detectSubagent(body []byte) bool {
 			userMessageCount++
 		}
 	}
-	if userMessageCount < 10 {
+	if userMessageCount < 20 {
 		return true
 	}
-	if userMessageCount > 10 && hasSubagentMarkers(lastMessageText) {
+	if hasSubagentMarkers(lastMessageText) {
 		return true
 	}
 	return false
@@ -583,7 +583,8 @@ func hasSubagentMarkers(text string) bool {
 	return strings.Contains(lowerText, "read-only") ||
 		strings.Contains(lowerText, "act") ||
 		strings.Contains(lowerText, "continue") ||
-		strings.Contains(text, "继续")
+		strings.Contains(text, "继续") ||
+		strings.Contains(text, "claude")
 }
 
 // detectVisionContent checks if the request body contains vision/image content.
