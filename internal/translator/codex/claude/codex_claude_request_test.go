@@ -87,3 +87,23 @@ func TestConvertClaudeRequestToCodex_SystemMessageScenarios(t *testing.T) {
 		})
 	}
 }
+
+func TestConvertClaudeRequestToCodex_UsesExplicitOutputConfigEffort(t *testing.T) {
+	inputJSON := `{
+		"model": "claude-3-opus",
+		"messages": [{"role": "user", "content": "hello"}],
+		"thinking": { "type": "enabled", "budget_tokens": 31999 },
+		"output_config": { "effort": "high" }
+	}`
+
+	result := ConvertClaudeRequestToCodex("test-model", []byte(inputJSON), false)
+	resultJSON := gjson.ParseBytes(result)
+
+	if got := resultJSON.Get("reasoning.effort").String(); got != "high" {
+		t.Fatalf("reasoning.effort = %q, want %q. Output: %s", got, "high", resultJSON.Raw)
+	}
+
+	if got := resultJSON.Get("reasoning.summary").String(); got != "auto" {
+		t.Fatalf("reasoning.summary = %q, want %q. Output: %s", got, "auto", resultJSON.Raw)
+	}
+}
