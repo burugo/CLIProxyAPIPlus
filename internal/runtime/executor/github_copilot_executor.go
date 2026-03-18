@@ -548,29 +548,42 @@ func detectSubagent(body []byte) bool {
 	if !messages.Exists() || !messages.IsArray() {
 		return false
 	}
-	for _, msg := range messages.Array() {
-		if msg.Get("role").String() != "system" {
-			continue
-		}
-		text := msg.Get("content").String()
-		if text == "" {
-			// content may be an array of objects with .text fields
-			content := msg.Get("content")
+
+	messageArray := messages.Array()
+	userMessageCount := 0
+	lastMessageText := ""
+	if len(messageArray) > 0 {
+		lastMessage := messageArray[len(messageArray)-1]
+		lastMessageText = lastMessage.Get("content").String()
+		if lastMessageText == "" {
+			content := lastMessage.Get("content")
 			if content.IsArray() {
 				for _, part := range content.Array() {
-					text += part.Get("text").String()
+					lastMessageText += part.Get("text").String()
 				}
 			}
 		}
-		if hasSubagentMarkers(text) {
-			return true
+	}
+	for _, msg := range messageArray {
+		if msg.Get("role").String() == "user" {
+			userMessageCount++
 		}
+	}
+	if userMessageCount < 10 {
+		return true
+	}
+	if userMessageCount > 10 && hasSubagentMarkers(lastMessageText) {
+		return true
 	}
 	return false
 }
 
 func hasSubagentMarkers(text string) bool {
-	return strings.Contains(text, "READ-ONLY")
+	lowerText := strings.ToLower(text)
+	return strings.Contains(lowerText, "read-only") ||
+		strings.Contains(lowerText, "act") ||
+		strings.Contains(lowerText, "continue") ||
+		strings.Contains(text, "继续")
 }
 
 // detectVisionContent checks if the request body contains vision/image content.
