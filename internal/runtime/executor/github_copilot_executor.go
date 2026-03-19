@@ -569,10 +569,10 @@ func detectSubagent(body []byte) bool {
 			userMessageCount++
 		}
 	}
-	if userMessageCount < 20 {
+	if hasSubagentMarkers(lastMessageText) {
 		return true
 	}
-	if hasSubagentMarkers(lastMessageText) {
+	if userMessageCount > 0 && userMessageCount%5 == 0 {
 		return true
 	}
 	return false
