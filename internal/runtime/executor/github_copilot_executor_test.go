@@ -264,26 +264,25 @@ func TestTranslateGitHubCopilotResponsesStreamToClaude_TextLifecycle(t *testing.
 
 // --- Tests for X-Initiator detection logic (Problem L) ---
 
-func TestApplyHeaders_XInitiator_UserOnly(t *testing.T) {
+func TestApplyHeaders_XInitiator_AgentWhenUserCountIsNotMultipleOfFive(t *testing.T) {
 	t.Parallel()
 	e := &GitHubCopilotExecutor{}
 	req, _ := http.NewRequest(http.MethodPost, "https://example.com", nil)
 	body := []byte(`{"messages":[{"role":"system","content":"sys"},{"role":"user","content":"hello"}]}`)
 	e.applyHeaders(req, "token", body)
-	if got := req.Header.Get("X-Initiator"); got != "user" {
-		t.Fatalf("X-Initiator = %q, want user", got)
+	if got := req.Header.Get("X-Initiator"); got != "agent" {
+		t.Fatalf("X-Initiator = %q, want agent", got)
 	}
 }
 
-func TestApplyHeaders_XInitiator_UserWhenLastRoleIsUser(t *testing.T) {
+func TestApplyHeaders_XInitiator_AgentWhenLastRoleIsUserButUserCountIsNotMultipleOfFive(t *testing.T) {
 	t.Parallel()
 	e := &GitHubCopilotExecutor{}
 	req, _ := http.NewRequest(http.MethodPost, "https://example.com", nil)
-	// Last role governs the initiator decision.
 	body := []byte(`{"messages":[{"role":"user","content":"hello"},{"role":"assistant","content":"I will read the file"},{"role":"user","content":"tool result here"}]}`)
 	e.applyHeaders(req, "token", body)
-	if got := req.Header.Get("X-Initiator"); got != "user" {
-		t.Fatalf("X-Initiator = %q, want user (last role is user)", got)
+	if got := req.Header.Get("X-Initiator"); got != "agent" {
+		t.Fatalf("X-Initiator = %q, want agent (user count is not a multiple of five)", got)
 	}
 }
 
@@ -355,14 +354,14 @@ func TestApplyHeaders_XInitiator_ClaudeCodeSubagentArrayContent(t *testing.T) {
 	}
 }
 
-func TestApplyHeaders_XInitiator_NormalUserWithSystem(t *testing.T) {
+func TestApplyHeaders_XInitiator_AgentForNormalUserRequestWhenUserCountIsNotMultipleOfFive(t *testing.T) {
 	t.Parallel()
 	e := &GitHubCopilotExecutor{}
 	req, _ := http.NewRequest(http.MethodPost, "https://example.com", nil)
 	body := []byte(`{"messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"hello"}]}`)
 	e.applyHeaders(req, "token", body)
-	if got := req.Header.Get("X-Initiator"); got != "user" {
-		t.Fatalf("X-Initiator = %q, want user (normal request)", got)
+	if got := req.Header.Get("X-Initiator"); got != "agent" {
+		t.Fatalf("X-Initiator = %q, want agent (user count is not a multiple of five)", got)
 	}
 }
 
@@ -374,11 +373,19 @@ func TestDetectSubagent_Positive(t *testing.T) {
 	}
 }
 
-func TestDetectSubagent_NegativeNoMarkers(t *testing.T) {
+func TestDetectSubagent_PositiveWhenUserCountIsNotMultipleOfFive(t *testing.T) {
 	t.Parallel()
 	body := []byte(`{"messages":[{"role":"system","content":"You are a helpful coding assistant."},{"role":"user","content":"hello"}]}`)
+	if !detectSubagent(body) {
+		t.Fatal("expected subagent detection when user message count is not a multiple of five")
+	}
+}
+
+func TestDetectSubagent_NegativeWhenUserCountIsMultipleOfFive(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"messages":[{"role":"user","content":"u1"},{"role":"assistant","content":"a1"},{"role":"user","content":"u2"},{"role":"assistant","content":"a2"},{"role":"user","content":"u3"},{"role":"assistant","content":"a3"},{"role":"user","content":"u4"},{"role":"assistant","content":"a4"},{"role":"user","content":"u5"}]}`)
 	if detectSubagent(body) {
-		t.Fatal("expected no subagent detection for normal system prompt")
+		t.Fatal("expected no subagent detection when user message count is a multiple of five")
 	}
 }
 
