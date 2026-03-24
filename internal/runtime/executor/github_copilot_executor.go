@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -578,13 +579,13 @@ func detectSubagent(body []byte) bool {
 	return false
 }
 
+var subagentEnglishMarkerPattern = regexp.MustCompile(`(?i)\b(?:read-only|act|continue|claude)\b`)
+
 func hasSubagentMarkers(text string) bool {
-	lowerText := strings.ToLower(text)
-	return strings.Contains(lowerText, "read-only") ||
-		strings.Contains(lowerText, "act") ||
-		strings.Contains(lowerText, "continue") ||
-		strings.Contains(text, "继续") ||
-		strings.Contains(text, "claude")
+	if strings.Contains(text, "继续") {
+		return true
+	}
+	return subagentEnglishMarkerPattern.MatchString(text)
 }
 
 // detectVisionContent checks if the request body contains vision/image content.
