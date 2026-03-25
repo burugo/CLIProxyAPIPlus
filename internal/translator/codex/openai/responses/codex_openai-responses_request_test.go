@@ -219,6 +219,28 @@ func TestConvertOpenAIResponsesRequestToCodex_OriginalIssue(t *testing.T) {
 	}
 }
 
+func TestConvertOpenAIResponsesRequestToCodex_ShouldRemoveStreamOptions(t *testing.T) {
+	inputJSON := []byte(`{
+		"model": "gpt-5.4",
+		"input": [{
+			"type": "message",
+			"role": "user",
+			"content": [{"type": "input_text", "text": "hello"}]
+		}],
+		"stream": true,
+		"stream_options": {
+			"include_obfuscation": false
+		}
+	}`)
+
+	output := ConvertOpenAIResponsesRequestToCodex("gpt-5.4", inputJSON, true)
+	outputStr := string(output)
+
+	if gjson.Get(outputStr, "stream_options").Exists() {
+		t.Fatalf("expected stream_options to be removed, got %s", gjson.Get(outputStr, "stream_options").Raw)
+	}
+}
+
 // TestConvertSystemRoleToDeveloper_AssistantRole tests that assistant role is preserved
 func TestConvertSystemRoleToDeveloper_AssistantRole(t *testing.T) {
 	inputJSON := []byte(`{
