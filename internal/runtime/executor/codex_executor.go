@@ -30,6 +30,7 @@ import (
 const (
 	codexClientVersion = "0.101.0"
 	codexUserAgent     = "opencode/1.2.21 (darwin 25.3.0; arm64) ai-sdk/provider-utils/3.0.20 runtime/bun/1.3.10"
+	codexOriginator    = "opencode"
 )
 
 var dataTag = []byte("data:")

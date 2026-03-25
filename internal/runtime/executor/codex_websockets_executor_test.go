@@ -53,6 +53,9 @@ func TestApplyCodexWebsocketHeadersDefaultsToCurrentResponsesBeta(t *testing.T) 
 	if got := headers.Get("X-Client-Request-Id"); got != "" {
 		t.Fatalf("X-Client-Request-Id = %q, want empty", got)
 	}
+	if got := headers.Get("Originator"); got != "opencode" {
+		t.Fatalf("Originator = %q, want opencode", got)
+	}
 }
 
 func TestApplyCodexWebsocketHeadersPassesThroughClientIdentityHeaders(t *testing.T) {
