@@ -154,7 +154,7 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 	if err != nil {
 		return resp, err
 	}
-	body = applyGitHubCopilotClaudeAdaptiveThinking(req.Model, body, originalPayload)
+	body = normalizeGitHubCopilotClaudeThinking(req.Model, body, originalPayload)
 
 	if useResponses {
 		body = normalizeGitHubCopilotResponsesInput(body)
@@ -164,6 +164,9 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 	}
 	requestedModel := payloadRequestedModel(opts, req.Model)
 	body = applyPayloadConfigWithRoot(e.cfg, req.Model, to.String(), "", body, originalTranslated, requestedModel)
+	if useClaudeMessages {
+		body = normalizeGitHubCopilotClaudeMessagesBody(body)
+	}
 	body, _ = sjson.SetBytes(body, "stream", false)
 
 	url := baseURL + path
@@ -307,7 +310,7 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 	if err != nil {
 		return nil, err
 	}
-	body = applyGitHubCopilotClaudeAdaptiveThinking(req.Model, body, originalPayload)
+	body = normalizeGitHubCopilotClaudeThinking(req.Model, body, originalPayload)
 
 	if useResponses {
 		body = normalizeGitHubCopilotResponsesInput(body)
@@ -317,6 +320,9 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 	}
 	requestedModel := payloadRequestedModel(opts, req.Model)
 	body = applyPayloadConfigWithRoot(e.cfg, req.Model, to.String(), "", body, originalTranslated, requestedModel)
+	if useClaudeMessages {
+		body = normalizeGitHubCopilotClaudeMessagesBody(body)
+	}
 	body, _ = sjson.SetBytes(body, "stream", true)
 	// Enable stream options for usage stats in stream (OpenAI paths only)
 	if !useResponses && !useClaudeMessages {
@@ -716,9 +722,20 @@ func (e *GitHubCopilotExecutor) normalizeModel(model string, body []byte) []byte
 	return body
 }
 
-func applyGitHubCopilotClaudeAdaptiveThinking(model string, body, original []byte) []byte {
+func normalizeGitHubCopilotClaudeThinking(model string, body, original []byte) []byte {
 	baseModel := strings.ToLower(strings.TrimSpace(thinking.ParseSuffix(model).ModelName))
 	if baseModel != "claude-opus-4.6" && baseModel != "claude-sonnet-4.6" {
+		return body
+	}
+	if shouldDisableGitHubCopilotClaudeThinking(body, original) {
+		body, _ = sjson.DeleteBytes(body, "reasoning_effort")
+		body, _ = sjson.DeleteBytes(body, "reasoning.effort")
+		body, _ = sjson.SetBytes(body, "thinking.type", "disabled")
+		body, _ = sjson.DeleteBytes(body, "thinking.budget_tokens")
+		body, _ = sjson.DeleteBytes(body, "output_config.effort")
+		if oc := gjson.GetBytes(body, "output_config"); oc.Exists() && oc.IsObject() && len(oc.Map()) == 0 {
+			body, _ = sjson.DeleteBytes(body, "output_config")
+		}
 		return body
 	}
 	if !hasGitHubCopilotClaudeThinkingIntent(model, body, original) {
@@ -726,6 +743,7 @@ func applyGitHubCopilotClaudeAdaptiveThinking(model string, body, original []byt
 	}
 	if effort := gjson.GetBytes(body, "output_config.effort").String(); effort != "" {
 		body, _ = sjson.SetBytes(body, "thinking.type", "adaptive")
+		body, _ = sjson.DeleteBytes(body, "thinking.budget_tokens")
 		return body
 	}
 	effort := deriveGitHubCopilotClaudeEffort(model, body, original)
@@ -735,12 +753,19 @@ func applyGitHubCopilotClaudeAdaptiveThinking(model string, body, original []byt
 	body, _ = sjson.DeleteBytes(body, "reasoning_effort")
 	body, _ = sjson.DeleteBytes(body, "reasoning.effort")
 	body, _ = sjson.SetBytes(body, "thinking.type", "adaptive")
+	body, _ = sjson.DeleteBytes(body, "thinking.budget_tokens")
 	body, _ = sjson.SetBytes(body, "output_config.effort", effort)
 	return body
 }
 
 func hasGitHubCopilotClaudeThinkingIntent(model string, body, original []byte) bool {
 	if gjson.GetBytes(body, "thinking.type").String() == "adaptive" {
+		return true
+	}
+	if gjson.GetBytes(body, "thinking.type").String() == "enabled" {
+		return true
+	}
+	if gjson.GetBytes(body, "thinking.budget_tokens").Exists() {
 		return true
 	}
 	if gjson.GetBytes(body, "output_config.effort").String() != "" {
@@ -754,6 +779,12 @@ func hasGitHubCopilotClaudeThinkingIntent(model string, body, original []byte) b
 	}
 	if len(original) > 0 {
 		if gjson.GetBytes(original, "thinking.type").String() == "adaptive" {
+			return true
+		}
+		if gjson.GetBytes(original, "thinking.type").String() == "enabled" {
+			return true
+		}
+		if gjson.GetBytes(original, "thinking.budget_tokens").Exists() {
 			return true
 		}
 		if gjson.GetBytes(original, "output_config.effort").String() != "" {
@@ -775,6 +806,9 @@ func deriveGitHubCopilotClaudeEffort(model string, body, original []byte) string
 		if len(raw) == 0 {
 			continue
 		}
+		if effort := deriveGitHubCopilotClaudeEffortFromBudget(raw); effort != "" {
+			return effort
+		}
 		if effort := normalizeGitHubCopilotClaudeEffort(gjson.GetBytes(raw, "output_config.effort").String()); effort != "" {
 			return effort
 		}
@@ -791,6 +825,37 @@ func deriveGitHubCopilotClaudeEffort(model string, body, original []byte) string
 		}
 	}
 	return ""
+}
+
+func shouldDisableGitHubCopilotClaudeThinking(body, original []byte) bool {
+	for _, raw := range [][]byte{body, original} {
+		if len(raw) == 0 {
+			continue
+		}
+		if gjson.GetBytes(raw, "thinking.type").String() == "disabled" {
+			return true
+		}
+		budget := gjson.GetBytes(raw, "thinking.budget_tokens")
+		if budget.Exists() && budget.Type == gjson.Number && budget.Int() == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func deriveGitHubCopilotClaudeEffortFromBudget(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	budget := gjson.GetBytes(raw, "thinking.budget_tokens")
+	if !budget.Exists() || budget.Type != gjson.Number {
+		return ""
+	}
+	level, ok := thinking.ConvertBudgetToLevel(int(budget.Int()))
+	if !ok {
+		return ""
+	}
+	return normalizeGitHubCopilotClaudeEffort(level)
 }
 
 func normalizeGitHubCopilotClaudeEffort(value string) string {
@@ -1017,6 +1082,16 @@ func normalizeGitHubCopilotChatTools(body []byte) []byte {
 		}
 	}
 	body, _ = sjson.SetBytes(body, "tool_choice", "auto")
+	return body
+}
+
+func normalizeGitHubCopilotClaudeMessagesBody(body []byte) []byte {
+	if gjson.GetBytes(body, "context_management").Exists() {
+		body, _ = sjson.DeleteBytes(body, "context_management")
+	}
+	if gjson.GetBytes(body, "metadata").Exists() {
+		body, _ = sjson.DeleteBytes(body, "metadata")
+	}
 	return body
 }
 

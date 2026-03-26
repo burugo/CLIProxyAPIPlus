@@ -142,38 +142,72 @@ func TestUseGitHubCopilotResponsesEndpoint_DefaultChat(t *testing.T) {
 	}
 }
 
-func TestApplyGitHubCopilotClaudeAdaptiveThinking_PreservesExistingEffort(t *testing.T) {
+func TestNormalizeGitHubCopilotClaudeThinking_PreservesExistingEffort(t *testing.T) {
 	t.Parallel()
 
 	body := []byte(`{"model":"claude-opus-4.6","thinking":{"type":"adaptive"},"output_config":{"effort":"medium"}}`)
 	original := []byte(`{"reasoning_effort":"high"}`)
-	got := applyGitHubCopilotClaudeAdaptiveThinking("claude-opus-4.6", body, original)
+	got := normalizeGitHubCopilotClaudeThinking("claude-opus-4.6", body, original)
 
 	if effort := gjson.GetBytes(got, "output_config.effort").String(); effort != "medium" {
 		t.Fatalf("output_config.effort = %q, want medium", effort)
 	}
 }
 
-func TestApplyGitHubCopilotClaudeAdaptiveThinking_DerivesEffortFromOriginalRequest(t *testing.T) {
+func TestNormalizeGitHubCopilotClaudeThinking_DerivesEffortFromOriginalRequest(t *testing.T) {
 	t.Parallel()
 
 	body := []byte(`{"model":"claude-opus-4.6","thinking":{"type":"adaptive"}}`)
 	original := []byte(`{"reasoning_effort":"high"}`)
-	got := applyGitHubCopilotClaudeAdaptiveThinking("claude-opus-4.6", body, original)
+	got := normalizeGitHubCopilotClaudeThinking("claude-opus-4.6", body, original)
 
 	if effort := gjson.GetBytes(got, "output_config.effort").String(); effort != "high" {
 		t.Fatalf("output_config.effort = %q, want high", effort)
 	}
 }
 
-func TestApplyGitHubCopilotClaudeAdaptiveThinking_DefaultsToHighForAdaptiveThinking(t *testing.T) {
+func TestNormalizeGitHubCopilotClaudeThinking_DefaultsToHighForAdaptiveThinking(t *testing.T) {
 	t.Parallel()
 
 	body := []byte(`{"model":"claude-sonnet-4.6","thinking":{"type":"adaptive"}}`)
-	got := applyGitHubCopilotClaudeAdaptiveThinking("claude-sonnet-4.6", body, nil)
+	got := normalizeGitHubCopilotClaudeThinking("claude-sonnet-4.6", body, nil)
 
 	if effort := gjson.GetBytes(got, "output_config.effort").String(); effort != "high" {
 		t.Fatalf("output_config.effort = %q, want high", effort)
+	}
+}
+
+func TestNormalizeGitHubCopilotClaudeThinking_ConvertsBudgetTokensToAdaptiveEffort(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{"model":"claude-opus-4.6","thinking":{"type":"enabled","budget_tokens":31999}}`)
+	got := normalizeGitHubCopilotClaudeThinking("claude-opus-4.6", body, nil)
+
+	if thinkingType := gjson.GetBytes(got, "thinking.type").String(); thinkingType != "adaptive" {
+		t.Fatalf("thinking.type = %q, want adaptive", thinkingType)
+	}
+	if effort := gjson.GetBytes(got, "output_config.effort").String(); effort != "high" {
+		t.Fatalf("output_config.effort = %q, want high", effort)
+	}
+	if gjson.GetBytes(got, "thinking.budget_tokens").Exists() {
+		t.Fatalf("thinking.budget_tokens should be removed, body=%s", string(got))
+	}
+}
+
+func TestNormalizeGitHubCopilotClaudeThinking_DisablesZeroBudgetThinking(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{"model":"claude-opus-4.6","thinking":{"type":"enabled","budget_tokens":0}}`)
+	got := normalizeGitHubCopilotClaudeThinking("claude-opus-4.6", body, nil)
+
+	if thinkingType := gjson.GetBytes(got, "thinking.type").String(); thinkingType != "disabled" {
+		t.Fatalf("thinking.type = %q, want disabled", thinkingType)
+	}
+	if gjson.GetBytes(got, "thinking.budget_tokens").Exists() {
+		t.Fatalf("thinking.budget_tokens should be removed, body=%s", string(got))
+	}
+	if gjson.GetBytes(got, "output_config.effort").Exists() {
+		t.Fatalf("output_config.effort should be removed, body=%s", string(got))
 	}
 }
 
@@ -682,6 +716,52 @@ func TestApplyHeaders_NonClaudeNoAnthropicBeta(t *testing.T) {
 	// Non-Claude path should NOT set anthropic-beta.
 	if got := req.Header.Get("Anthropic-Beta"); got != "" {
 		t.Fatalf("Anthropic-Beta should be empty for non-Claude path, got %q", got)
+	}
+}
+
+func TestNormalizeGitHubCopilotClaudeMessagesBody_StripsContextManagement(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{
+		"model": "claude-opus-4.6",
+		"messages": [{"role":"user","content":[{"type":"text","text":"hello"}]}],
+		"context_management": [{"type":"compaction","compact_threshold":12000}]
+	}`)
+
+	got := normalizeGitHubCopilotClaudeMessagesBody(body)
+	if gjson.GetBytes(got, "context_management").Exists() {
+		t.Fatal("context_management should be removed for GitHub Copilot Claude messages compatibility")
+	}
+	if model := gjson.GetBytes(got, "model").String(); model != "claude-opus-4.6" {
+		t.Fatalf("model = %q, want claude-opus-4.6", model)
+	}
+	if text := gjson.GetBytes(got, "messages.0.content.0.text").String(); text != "hello" {
+		t.Fatalf("messages[0].content[0].text = %q, want hello", text)
+	}
+}
+
+func TestNormalizeGitHubCopilotClaudeMessagesBody_NoContextManagement(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"model":"claude-sonnet-4.6","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+
+	got := normalizeGitHubCopilotClaudeMessagesBody(body)
+	if text := gjson.GetBytes(got, "messages.0.content.0.text").String(); text != "hi" {
+		t.Fatalf("messages[0].content[0].text = %q, want hi", text)
+	}
+	if gjson.GetBytes(got, "context_management").Exists() {
+		t.Fatal("context_management should remain absent")
+	}
+}
+
+func TestNormalizeGitHubCopilotClaudeMessagesBody_StripsMetadata(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"model":"claude-opus-4.6","metadata":{"user_id":"abc"},"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`)
+
+	got := normalizeGitHubCopilotClaudeMessagesBody(body)
+	if gjson.GetBytes(got, "metadata").Exists() {
+		t.Fatal("metadata should be removed for GitHub Copilot Claude messages compatibility")
+	}
+	if text := gjson.GetBytes(got, "messages.0.content.0.text").String(); text != "hello" {
+		t.Fatalf("messages[0].content[0].text = %q, want hello", text)
 	}
 }
 
