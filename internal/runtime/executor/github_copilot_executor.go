@@ -184,6 +184,11 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 		httpReq.Header.Set("Copilot-Vision-Request", "true")
 	}
 
+	log.WithFields(log.Fields{
+		"model":       req.Model,
+		"X-Initiator": httpReq.Header.Get("X-Initiator"),
+	}).Debug("github-copilot: request headers |")
+
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
 		authID = auth.ID
@@ -343,6 +348,11 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 	if hasVision {
 		httpReq.Header.Set("Copilot-Vision-Request", "true")
 	}
+
+	log.WithFields(log.Fields{
+		"model":       req.Model,
+		"X-Initiator": httpReq.Header.Get("X-Initiator"),
+	}).Debug("github-copilot: request headers |")
 
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
