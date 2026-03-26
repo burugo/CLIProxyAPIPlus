@@ -25,6 +25,12 @@ func TestGitHubCopilotApplyHeaders_UsesLatestProfile(t *testing.T) {
 	if got := req.Header.Get("User-Agent"); got != copilotUserAgent {
 		t.Fatalf("User-Agent = %q, want %q", got, copilotUserAgent)
 	}
+	if got := req.Header.Get("Editor-Version"); got != copilotEditorVersion {
+		t.Fatalf("Editor-Version = %q, want %q", got, copilotEditorVersion)
+	}
+	if got := req.Header.Get("Editor-Plugin-Version"); got != copilotPluginVersion {
+		t.Fatalf("Editor-Plugin-Version = %q, want %q", got, copilotPluginVersion)
+	}
 	if got := req.Header.Get("Openai-Intent"); got != copilotOpenAIIntent {
 		t.Fatalf("Openai-Intent = %q, want %q", got, copilotOpenAIIntent)
 	}
@@ -36,6 +42,12 @@ func TestGitHubCopilotApplyHeaders_UsesLatestProfile(t *testing.T) {
 	}
 	if got := req.Header.Get("X-Initiator"); got != "user" {
 		t.Fatalf("X-Initiator = %q, want user", got)
+	}
+	if got := req.Header.Get("X-Interaction-Type"); got != copilotInteractionType {
+		t.Fatalf("X-Interaction-Type = %q, want %q", got, copilotInteractionType)
+	}
+	if got := req.Header.Get("X-Vscode-User-Agent-Library-Version"); got != copilotUserAgentLibVer {
+		t.Fatalf("X-Vscode-User-Agent-Library-Version = %q, want %q", got, copilotUserAgentLibVer)
 	}
 }
 
@@ -541,8 +553,8 @@ func TestApplyHeaders_GitHubAPIVersion(t *testing.T) {
 	e := &GitHubCopilotExecutor{}
 	req, _ := http.NewRequest(http.MethodPost, "https://example.com", nil)
 	e.applyHeaders(req, "token", nil)
-	if got := req.Header.Get("X-Github-Api-Version"); got != "2025-05-01" {
-		t.Fatalf("X-Github-Api-Version = %q, want 2025-05-01", got)
+	if got := req.Header.Get("X-Github-Api-Version"); got != "2025-10-01" {
+		t.Fatalf("X-Github-Api-Version = %q, want 2025-10-01", got)
 	}
 }
 

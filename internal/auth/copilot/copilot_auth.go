@@ -25,14 +25,16 @@ const (
 	copilotAPIEndpoint = "https://api.githubcopilot.com"
 
 	// Common HTTP header values for Copilot API requests.
-	copilotUserAgent      = "copilot/1.0.10 (darwin v22.22.1) term/unknown"
-	copilotEditorVersion  = "vscode/1.100.0"
-	copilotPluginVersion  = "copilot-developer-cli/1.0.10"
-	copilotIntegrationID  = "copilot-developer-cli"
-	copilotOpenAIIntent   = "conversation-agent"
-	copilotGitHubAPIVer   = "2025-05-01"
-	copilotInitiator      = "user"
-	copilotAcceptLanguage = "*"
+	copilotUserAgent       = "GitHubCopilotChat/0.41.1"
+	copilotEditorVersion   = "vscode/1.113.0"
+	copilotPluginVersion   = "copilot-chat/0.41.1"
+	copilotIntegrationID   = "vscode-chat"
+	copilotOpenAIIntent    = "conversation-agent"
+	copilotGitHubAPIVer    = "2025-10-01"
+	copilotInitiator       = "user"
+	copilotAcceptLanguage  = "*"
+	copilotInteractionType = "conversation-agent"
+	copilotUserAgentLibVer = "electron-fetch"
 )
 
 // CopilotAPIToken represents the Copilot API token response.
@@ -220,11 +222,16 @@ func (c *CopilotAuth) MakeAuthenticatedRequest(ctx context.Context, method, url 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", copilotUserAgent)
+	req.Header.Set("Editor-Version", copilotEditorVersion)
+	req.Header.Set("Editor-Plugin-Version", copilotPluginVersion)
+	req.Header.Set("Editor-Device-Id", uuid.NewString())
 	req.Header.Set("Openai-Intent", copilotOpenAIIntent)
 	req.Header.Set("Copilot-Integration-Id", copilotIntegrationID)
 	req.Header.Set("X-GitHub-Api-Version", copilotGitHubAPIVer)
 	req.Header.Set("X-Initiator", copilotInitiator)
 	req.Header.Set("X-Interaction-Id", uuid.NewString())
+	req.Header.Set("X-Interaction-Type", copilotInteractionType)
+	req.Header.Set("X-Vscode-User-Agent-Library-Version", copilotUserAgentLibVer)
 	req.Header.Set("Accept-Language", copilotAcceptLanguage)
 
 	return req, nil

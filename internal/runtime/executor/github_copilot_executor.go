@@ -37,13 +37,15 @@ const (
 	maxScannerBufferSize = 20_971_520
 
 	// Copilot API header values.
-	copilotUserAgent     = "copilot/1.0.10 (darwin v22.22.1) term/unknown"
-	copilotEditorVersion = "vscode/1.107.0"
-	copilotPluginVersion = "copilot-developer-cli/1.0.10"
-	copilotIntegrationID = "copilot-developer-cli"
-	copilotOpenAIIntent  = "conversation-agent"
-	copilotGitHubAPIVer  = "2025-05-01"
-	copilotAcceptLang    = "*"
+	copilotUserAgent       = "GitHubCopilotChat/0.41.1"
+	copilotEditorVersion   = "vscode/1.113.0"
+	copilotPluginVersion   = "copilot-chat/0.41.1"
+	copilotIntegrationID   = "vscode-chat"
+	copilotOpenAIIntent    = "conversation-agent"
+	copilotGitHubAPIVer    = "2025-10-01"
+	copilotAcceptLang      = "*"
+	copilotInteractionType = "conversation-agent"
+	copilotUserAgentLibVer = "electron-fetch"
 )
 
 // GitHubCopilotExecutor handles requests to the GitHub Copilot API.
@@ -483,14 +485,22 @@ func (e *GitHubCopilotExecutor) ensureAPIToken(ctx context.Context, auth *clipro
 
 // applyHeaders sets the required headers for GitHub Copilot API requests.
 func (e *GitHubCopilotExecutor) applyHeaders(r *http.Request, apiToken string, body []byte) {
+	requestID := uuid.NewString()
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Authorization", "Bearer "+apiToken)
 	r.Header.Set("Accept", "application/json")
 	r.Header.Set("User-Agent", copilotUserAgent)
+	r.Header.Set("Editor-Version", copilotEditorVersion)
+	r.Header.Set("Editor-Plugin-Version", copilotPluginVersion)
+	r.Header.Set("Editor-Device-Id", uuid.NewString())
 	r.Header.Set("Openai-Intent", copilotOpenAIIntent)
 	r.Header.Set("Copilot-Integration-Id", copilotIntegrationID)
 	r.Header.Set("X-GitHub-Api-Version", copilotGitHubAPIVer)
 	r.Header.Set("X-Interaction-Id", uuid.NewString())
+	r.Header.Set("X-Interaction-Type", copilotInteractionType)
+	r.Header.Set("X-Request-Id", requestID)
+	r.Header.Set("X-Agent-Task-Id", requestID)
+	r.Header.Set("X-Vscode-User-Agent-Library-Version", copilotUserAgentLibVer)
 	r.Header.Set("Accept-Language", copilotAcceptLang)
 
 	initiator := "user"
