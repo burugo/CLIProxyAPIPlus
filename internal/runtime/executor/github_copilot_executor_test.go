@@ -11,6 +11,34 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+func TestGitHubCopilotApplyHeaders_UsesLatestProfile(t *testing.T) {
+	t.Parallel()
+
+	req, err := http.NewRequest(http.MethodPost, "https://example.com", bytes.NewReader(nil))
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+
+	e := &GitHubCopilotExecutor{}
+	e.applyHeaders(req, "token-123", nil)
+
+	if got := req.Header.Get("User-Agent"); got != copilotUserAgent {
+		t.Fatalf("User-Agent = %q, want %q", got, copilotUserAgent)
+	}
+	if got := req.Header.Get("Openai-Intent"); got != copilotOpenAIIntent {
+		t.Fatalf("Openai-Intent = %q, want %q", got, copilotOpenAIIntent)
+	}
+	if got := req.Header.Get("Copilot-Integration-Id"); got != copilotIntegrationID {
+		t.Fatalf("Copilot-Integration-Id = %q, want %q", got, copilotIntegrationID)
+	}
+	if got := req.Header.Get("X-Github-Api-Version"); got != copilotGitHubAPIVer {
+		t.Fatalf("X-Github-Api-Version = %q, want %q", got, copilotGitHubAPIVer)
+	}
+	if got := req.Header.Get("X-Initiator"); got != "user" {
+		t.Fatalf("X-Initiator = %q, want user", got)
+	}
+}
+
 func TestGitHubCopilotNormalizeModel_StripsSuffix(t *testing.T) {
 	t.Parallel()
 
@@ -99,6 +127,91 @@ func TestUseGitHubCopilotResponsesEndpoint_DefaultChat(t *testing.T) {
 	t.Parallel()
 	if useGitHubCopilotResponsesEndpoint(sdktranslator.FromString("openai"), "claude-3-5-sonnet") {
 		t.Fatal("expected default openai source with non-codex model to use /chat/completions")
+	}
+}
+
+func TestApplyGitHubCopilotClaudeAdaptiveThinking_PreservesExistingEffort(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{"model":"claude-opus-4.6","thinking":{"type":"adaptive"},"output_config":{"effort":"medium"}}`)
+	original := []byte(`{"reasoning_effort":"high"}`)
+	got := applyGitHubCopilotClaudeAdaptiveThinking("claude-opus-4.6", body, original)
+
+	if effort := gjson.GetBytes(got, "output_config.effort").String(); effort != "medium" {
+		t.Fatalf("output_config.effort = %q, want medium", effort)
+	}
+}
+
+func TestApplyGitHubCopilotClaudeAdaptiveThinking_DerivesEffortFromOriginalRequest(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{"model":"claude-opus-4.6","thinking":{"type":"adaptive"}}`)
+	original := []byte(`{"reasoning_effort":"high"}`)
+	got := applyGitHubCopilotClaudeAdaptiveThinking("claude-opus-4.6", body, original)
+
+	if effort := gjson.GetBytes(got, "output_config.effort").String(); effort != "high" {
+		t.Fatalf("output_config.effort = %q, want high", effort)
+	}
+}
+
+func TestApplyGitHubCopilotClaudeAdaptiveThinking_DefaultsToHighForAdaptiveThinking(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{"model":"claude-sonnet-4.6","thinking":{"type":"adaptive"}}`)
+	got := applyGitHubCopilotClaudeAdaptiveThinking("claude-sonnet-4.6", body, nil)
+
+	if effort := gjson.GetBytes(got, "output_config.effort").String(); effort != "high" {
+		t.Fatalf("output_config.effort = %q, want high", effort)
+	}
+}
+
+func TestApplyGitHubCopilotCapabilities_MapsClaudeThinkingSupport(t *testing.T) {
+	t.Parallel()
+
+	model := &registry.ModelInfo{ID: "claude-opus-4.6"}
+	applyGitHubCopilotCapabilities(model, map[string]any{
+		"limits": map[string]any{
+			"max_context_window_tokens": float64(144000),
+			"max_output_tokens":         float64(64000),
+		},
+		"supports": map[string]any{
+			"adaptive_thinking":   true,
+			"min_thinking_budget": float64(1024),
+			"max_thinking_budget": float64(32000),
+			"reasoning_effort":    []any{"low", "medium", "high"},
+		},
+	})
+
+	if model.ContextLength != 144000 {
+		t.Fatalf("ContextLength = %d, want 144000", model.ContextLength)
+	}
+	if model.MaxCompletionTokens != 64000 {
+		t.Fatalf("MaxCompletionTokens = %d, want 64000", model.MaxCompletionTokens)
+	}
+	if model.Thinking == nil {
+		t.Fatal("Thinking = nil, want populated support")
+	}
+	if model.Thinking.Min != 1024 || model.Thinking.Max != 32000 {
+		t.Fatalf("Thinking budget = [%d,%d], want [1024,32000]", model.Thinking.Min, model.Thinking.Max)
+	}
+	if got := model.Thinking.Levels; strings.Join(got, ",") != "low,medium,high" {
+		t.Fatalf("Thinking.Levels = %v, want [low medium high]", got)
+	}
+}
+
+func TestApplyGitHubCopilotCapabilities_DoesNotInferThinkingFromHaikuBudgetOnly(t *testing.T) {
+	t.Parallel()
+
+	model := &registry.ModelInfo{ID: "claude-haiku-4.5"}
+	applyGitHubCopilotCapabilities(model, map[string]any{
+		"supports": map[string]any{
+			"min_thinking_budget": float64(1024),
+			"max_thinking_budget": float64(32000),
+		},
+	})
+
+	if model.Thinking != nil {
+		t.Fatalf("Thinking = %v, want nil for haiku budget-only capability card", model.Thinking)
 	}
 }
 
@@ -239,14 +352,14 @@ func TestTranslateGitHubCopilotResponsesNonStreamToClaude_TextMapping(t *testing
 	t.Parallel()
 	resp := []byte(`{"id":"resp_1","model":"gpt-5-codex","output":[{"type":"message","content":[{"type":"output_text","text":"hello"}]}],"usage":{"input_tokens":3,"output_tokens":5}}`)
 	out := translateGitHubCopilotResponsesNonStreamToClaude(resp)
-	if gjson.GetBytes(out,"type").String() != "message" {
-		t.Fatalf("type = %q, want message", gjson.GetBytes(out,"type").String())
+	if gjson.GetBytes(out, "type").String() != "message" {
+		t.Fatalf("type = %q, want message", gjson.GetBytes(out, "type").String())
 	}
-	if gjson.GetBytes(out,"content.0.type").String() != "text" {
-		t.Fatalf("content.0.type = %q, want text", gjson.GetBytes(out,"content.0.type").String())
+	if gjson.GetBytes(out, "content.0.type").String() != "text" {
+		t.Fatalf("content.0.type = %q, want text", gjson.GetBytes(out, "content.0.type").String())
 	}
-	if gjson.GetBytes(out,"content.0.text").String() != "hello" {
-		t.Fatalf("content.0.text = %q, want hello", gjson.GetBytes(out,"content.0.text").String())
+	if gjson.GetBytes(out, "content.0.text").String() != "hello" {
+		t.Fatalf("content.0.text = %q, want hello", gjson.GetBytes(out, "content.0.text").String())
 	}
 }
 
@@ -254,14 +367,14 @@ func TestTranslateGitHubCopilotResponsesNonStreamToClaude_ToolUseMapping(t *test
 	t.Parallel()
 	resp := []byte(`{"id":"resp_2","model":"gpt-5-codex","output":[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"sum","arguments":"{\"a\":1}"}],"usage":{"input_tokens":1,"output_tokens":2}}`)
 	out := translateGitHubCopilotResponsesNonStreamToClaude(resp)
-	if gjson.GetBytes(out,"content.0.type").String() != "tool_use" {
-		t.Fatalf("content.0.type = %q, want tool_use", gjson.GetBytes(out,"content.0.type").String())
+	if gjson.GetBytes(out, "content.0.type").String() != "tool_use" {
+		t.Fatalf("content.0.type = %q, want tool_use", gjson.GetBytes(out, "content.0.type").String())
 	}
-	if gjson.GetBytes(out,"content.0.name").String() != "sum" {
-		t.Fatalf("content.0.name = %q, want sum", gjson.GetBytes(out,"content.0.name").String())
+	if gjson.GetBytes(out, "content.0.name").String() != "sum" {
+		t.Fatalf("content.0.name = %q, want sum", gjson.GetBytes(out, "content.0.name").String())
 	}
-	if gjson.GetBytes(out,"stop_reason").String() != "tool_use" {
-		t.Fatalf("stop_reason = %q, want tool_use", gjson.GetBytes(out,"stop_reason").String())
+	if gjson.GetBytes(out, "stop_reason").String() != "tool_use" {
+		t.Fatalf("stop_reason = %q, want tool_use", gjson.GetBytes(out, "stop_reason").String())
 	}
 }
 
@@ -428,8 +541,8 @@ func TestApplyHeaders_GitHubAPIVersion(t *testing.T) {
 	e := &GitHubCopilotExecutor{}
 	req, _ := http.NewRequest(http.MethodPost, "https://example.com", nil)
 	e.applyHeaders(req, "token", nil)
-	if got := req.Header.Get("X-Github-Api-Version"); got != "2025-04-01" {
-		t.Fatalf("X-Github-Api-Version = %q, want 2025-04-01", got)
+	if got := req.Header.Get("X-Github-Api-Version"); got != "2025-05-01" {
+		t.Fatalf("X-Github-Api-Version = %q, want 2025-05-01", got)
 	}
 }
 

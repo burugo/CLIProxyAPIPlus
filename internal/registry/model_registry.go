@@ -1169,13 +1169,17 @@ func (r *ModelRegistry) convertModelToMap(model *ModelInfo, handlerType string) 
 		// Also add "extended_thinking" for detailed budget info
 		if model.Thinking != nil {
 			result["thinking"] = true
-			result["extended_thinking"] = map[string]any{
+			extendedThinking := map[string]any{
 				"supported":       true,
 				"min":             model.Thinking.Min,
 				"max":             model.Thinking.Max,
 				"zero_allowed":    model.Thinking.ZeroAllowed,
 				"dynamic_allowed": model.Thinking.DynamicAllowed,
 			}
+			if len(model.Thinking.Levels) > 0 {
+				extendedThinking["levels"] = append([]string(nil), model.Thinking.Levels...)
+			}
+			result["extended_thinking"] = extendedThinking
 		}
 		return result
 

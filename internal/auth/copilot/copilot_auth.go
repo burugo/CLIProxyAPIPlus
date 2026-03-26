@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	log "github.com/sirupsen/logrus"
@@ -24,11 +25,14 @@ const (
 	copilotAPIEndpoint = "https://api.githubcopilot.com"
 
 	// Common HTTP header values for Copilot API requests.
-	copilotUserAgent       = "GithubCopilot/1.0"
-	copilotEditorVersion   = "vscode/1.100.0"
-	copilotPluginVersion   = "copilot/1.300.0"
-	copilotIntegrationID   = "vscode-chat"
-	copilotOpenAIIntent    = "conversation-panel"
+	copilotUserAgent      = "copilot/1.0.10 (darwin v22.22.1) term/unknown"
+	copilotEditorVersion  = "vscode/1.100.0"
+	copilotPluginVersion  = "copilot-developer-cli/1.0.10"
+	copilotIntegrationID  = "copilot-developer-cli"
+	copilotOpenAIIntent   = "conversation-agent"
+	copilotGitHubAPIVer   = "2025-05-01"
+	copilotInitiator      = "user"
+	copilotAcceptLanguage = "*"
 )
 
 // CopilotAPIToken represents the Copilot API token response.
@@ -216,23 +220,26 @@ func (c *CopilotAuth) MakeAuthenticatedRequest(ctx context.Context, method, url 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", copilotUserAgent)
-	req.Header.Set("Editor-Version", copilotEditorVersion)
-	req.Header.Set("Editor-Plugin-Version", copilotPluginVersion)
 	req.Header.Set("Openai-Intent", copilotOpenAIIntent)
 	req.Header.Set("Copilot-Integration-Id", copilotIntegrationID)
+	req.Header.Set("X-GitHub-Api-Version", copilotGitHubAPIVer)
+	req.Header.Set("X-Initiator", copilotInitiator)
+	req.Header.Set("X-Interaction-Id", uuid.NewString())
+	req.Header.Set("Accept-Language", copilotAcceptLanguage)
 
 	return req, nil
 }
 
 // CopilotModelEntry represents a single model entry returned by the Copilot /models API.
 type CopilotModelEntry struct {
-	ID           string         `json:"id"`
-	Object       string         `json:"object"`
-	Created      int64          `json:"created"`
-	OwnedBy      string         `json:"owned_by"`
-	Name         string         `json:"name,omitempty"`
-	Version      string         `json:"version,omitempty"`
-	Capabilities map[string]any `json:"capabilities,omitempty"`
+	ID                 string         `json:"id"`
+	Object             string         `json:"object"`
+	Created            int64          `json:"created"`
+	OwnedBy            string         `json:"owned_by"`
+	Name               string         `json:"name,omitempty"`
+	Version            string         `json:"version,omitempty"`
+	SupportedEndpoints []string       `json:"supported_endpoints,omitempty"`
+	Capabilities       map[string]any `json:"capabilities,omitempty"`
 }
 
 // CopilotModelsResponse represents the response from the Copilot /models endpoint.
@@ -246,9 +253,9 @@ const maxModelsResponseSize = 2 * 1024 * 1024
 
 // allowedCopilotAPIHosts is the set of hosts that are considered safe for Copilot API requests.
 var allowedCopilotAPIHosts = map[string]bool{
-	"api.githubcopilot.com":          true,
-	"api.individual.githubcopilot.com": true,
-	"api.business.githubcopilot.com":   true,
+	"api.githubcopilot.com":               true,
+	"api.individual.githubcopilot.com":    true,
+	"api.business.githubcopilot.com":      true,
 	"copilot-proxy.githubusercontent.com": true,
 }
 

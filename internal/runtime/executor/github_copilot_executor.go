@@ -37,12 +37,13 @@ const (
 	maxScannerBufferSize = 20_971_520
 
 	// Copilot API header values.
-	copilotUserAgent     = "GitHubCopilotChat/0.35.0"
+	copilotUserAgent     = "copilot/1.0.10 (darwin v22.22.1) term/unknown"
 	copilotEditorVersion = "vscode/1.107.0"
-	copilotPluginVersion = "copilot-chat/0.35.0"
-	copilotIntegrationID = "vscode-chat"
-	copilotOpenAIIntent  = "conversation-panel"
-	copilotGitHubAPIVer  = "2025-04-01"
+	copilotPluginVersion = "copilot-developer-cli/1.0.10"
+	copilotIntegrationID = "copilot-developer-cli"
+	copilotOpenAIIntent  = "conversation-agent"
+	copilotGitHubAPIVer  = "2025-05-01"
+	copilotAcceptLang    = "*"
 )
 
 // GitHubCopilotExecutor handles requests to the GitHub Copilot API.
@@ -139,6 +140,7 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 	if err != nil {
 		return resp, err
 	}
+	body = applyGitHubCopilotClaudeAdaptiveThinking(req.Model, body, originalPayload)
 
 	if useResponses {
 		body = normalizeGitHubCopilotResponsesInput(body)
@@ -269,6 +271,7 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 	if err != nil {
 		return nil, err
 	}
+	body = applyGitHubCopilotClaudeAdaptiveThinking(req.Model, body, originalPayload)
 
 	if useResponses {
 		body = normalizeGitHubCopilotResponsesInput(body)
@@ -484,12 +487,11 @@ func (e *GitHubCopilotExecutor) applyHeaders(r *http.Request, apiToken string, b
 	r.Header.Set("Authorization", "Bearer "+apiToken)
 	r.Header.Set("Accept", "application/json")
 	r.Header.Set("User-Agent", copilotUserAgent)
-	r.Header.Set("Editor-Version", copilotEditorVersion)
-	r.Header.Set("Editor-Plugin-Version", copilotPluginVersion)
 	r.Header.Set("Openai-Intent", copilotOpenAIIntent)
 	r.Header.Set("Copilot-Integration-Id", copilotIntegrationID)
-	r.Header.Set("X-Github-Api-Version", copilotGitHubAPIVer)
-	r.Header.Set("X-Request-Id", uuid.NewString())
+	r.Header.Set("X-GitHub-Api-Version", copilotGitHubAPIVer)
+	r.Header.Set("X-Interaction-Id", uuid.NewString())
+	r.Header.Set("Accept-Language", copilotAcceptLang)
 
 	initiator := "user"
 	if detectSubagent(body) {
@@ -627,6 +629,98 @@ func (e *GitHubCopilotExecutor) normalizeModel(model string, body []byte) []byte
 	return body
 }
 
+func applyGitHubCopilotClaudeAdaptiveThinking(model string, body, original []byte) []byte {
+	baseModel := strings.ToLower(strings.TrimSpace(thinking.ParseSuffix(model).ModelName))
+	if baseModel != "claude-opus-4.6" && baseModel != "claude-sonnet-4.6" {
+		return body
+	}
+	if !hasGitHubCopilotClaudeThinkingIntent(model, body, original) {
+		return body
+	}
+	if effort := gjson.GetBytes(body, "output_config.effort").String(); effort != "" {
+		body, _ = sjson.SetBytes(body, "thinking.type", "adaptive")
+		return body
+	}
+	effort := deriveGitHubCopilotClaudeEffort(model, body, original)
+	if effort == "" {
+		effort = "high"
+	}
+	body, _ = sjson.DeleteBytes(body, "reasoning_effort")
+	body, _ = sjson.DeleteBytes(body, "reasoning.effort")
+	body, _ = sjson.SetBytes(body, "thinking.type", "adaptive")
+	body, _ = sjson.SetBytes(body, "output_config.effort", effort)
+	return body
+}
+
+func hasGitHubCopilotClaudeThinkingIntent(model string, body, original []byte) bool {
+	if gjson.GetBytes(body, "thinking.type").String() == "adaptive" {
+		return true
+	}
+	if gjson.GetBytes(body, "output_config.effort").String() != "" {
+		return true
+	}
+	if gjson.GetBytes(body, "reasoning_effort").String() != "" {
+		return true
+	}
+	if gjson.GetBytes(body, "reasoning.effort").String() != "" {
+		return true
+	}
+	if len(original) > 0 {
+		if gjson.GetBytes(original, "thinking.type").String() == "adaptive" {
+			return true
+		}
+		if gjson.GetBytes(original, "output_config.effort").String() != "" {
+			return true
+		}
+		if gjson.GetBytes(original, "reasoning_effort").String() != "" {
+			return true
+		}
+		if gjson.GetBytes(original, "reasoning.effort").String() != "" {
+			return true
+		}
+	}
+	_, hasSuffix := thinking.ParseLevelSuffix(thinking.ParseSuffix(model).RawSuffix)
+	return hasSuffix
+}
+
+func deriveGitHubCopilotClaudeEffort(model string, body, original []byte) string {
+	for _, raw := range [][]byte{original, body} {
+		if len(raw) == 0 {
+			continue
+		}
+		if effort := normalizeGitHubCopilotClaudeEffort(gjson.GetBytes(raw, "output_config.effort").String()); effort != "" {
+			return effort
+		}
+		if effort := normalizeGitHubCopilotClaudeEffort(gjson.GetBytes(raw, "reasoning_effort").String()); effort != "" {
+			return effort
+		}
+		if effort := normalizeGitHubCopilotClaudeEffort(gjson.GetBytes(raw, "reasoning.effort").String()); effort != "" {
+			return effort
+		}
+	}
+	if level, ok := thinking.ParseLevelSuffix(thinking.ParseSuffix(model).RawSuffix); ok {
+		if effort := normalizeGitHubCopilotClaudeEffort(string(level)); effort != "" {
+			return effort
+		}
+	}
+	return ""
+}
+
+func normalizeGitHubCopilotClaudeEffort(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if value == "none" {
+		return ""
+	}
+	effort, ok := thinking.MapToClaudeEffort(value, false)
+	if !ok {
+		return ""
+	}
+	return effort
+}
+
 func useGitHubCopilotResponsesEndpoint(sourceFormat sdktranslator.Format, model string) bool {
 	if sourceFormat.String() == "openai-response" {
 		return true
@@ -648,6 +742,109 @@ func lookupGitHubCopilotStaticModelInfo(model string) *registry.ModelInfo {
 		}
 	}
 	return nil
+}
+
+func applyGitHubCopilotCapabilities(m *registry.ModelInfo, caps map[string]any) {
+	if m == nil || len(caps) == 0 {
+		return
+	}
+	limits, _ := caps["limits"].(map[string]any)
+	if value, ok := githubCopilotCapabilityInt(limits, "max_context_window_tokens"); ok {
+		m.ContextLength = value
+	}
+	if value, ok := githubCopilotCapabilityInt(limits, "max_output_tokens"); ok {
+		m.MaxCompletionTokens = value
+	}
+	supports, _ := caps["supports"].(map[string]any)
+	levels := githubCopilotCapabilityStringSlice(supports, "reasoning_effort")
+	minBudget, hasMin := githubCopilotCapabilityInt(supports, "min_thinking_budget")
+	maxBudget, hasMax := githubCopilotCapabilityInt(supports, "max_thinking_budget")
+	adaptive := githubCopilotCapabilityBool(supports, "adaptive_thinking")
+	isClaudeFamily := strings.HasPrefix(strings.ToLower(strings.TrimSpace(m.ID)), "claude-")
+	if !isClaudeFamily {
+		return
+	}
+	if !adaptive && len(levels) == 0 {
+		return
+	}
+	if m.Thinking == nil {
+		m.Thinking = &registry.ThinkingSupport{}
+	}
+	if hasMin {
+		m.Thinking.Min = minBudget
+	}
+	if hasMax {
+		m.Thinking.Max = maxBudget
+	}
+	if len(levels) > 0 {
+		m.Thinking.Levels = levels
+	}
+}
+
+func githubCopilotCapabilityInt(values map[string]any, key string) (int, bool) {
+	if len(values) == 0 {
+		return 0, false
+	}
+	value, ok := values[key]
+	if !ok {
+		return 0, false
+	}
+	switch typed := value.(type) {
+	case int:
+		return typed, true
+	case int32:
+		return int(typed), true
+	case int64:
+		return int(typed), true
+	case float64:
+		return int(typed), true
+	case float32:
+		return int(typed), true
+	default:
+		return 0, false
+	}
+}
+
+func githubCopilotCapabilityBool(values map[string]any, key string) bool {
+	if len(values) == 0 {
+		return false
+	}
+	value, ok := values[key]
+	if !ok {
+		return false
+	}
+	typed, ok := value.(bool)
+	return ok && typed
+}
+
+func githubCopilotCapabilityStringSlice(values map[string]any, key string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	value, ok := values[key]
+	if !ok {
+		return nil
+	}
+	rawItems, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	levels := make([]string, 0, len(rawItems))
+	for _, item := range rawItems {
+		text, ok := item.(string)
+		if !ok {
+			continue
+		}
+		text = strings.TrimSpace(text)
+		if text == "" {
+			continue
+		}
+		levels = append(levels, text)
+	}
+	if len(levels) == 0 {
+		return nil
+	}
+	return levels
 }
 
 func containsEndpoint(endpoints []string, endpoint string) bool {
@@ -1460,6 +1657,10 @@ func FetchGitHubCopilotModels(ctx context.Context, auth *cliproxyauth.Auth, cfg 
 			m.ContextLength = defaultCopilotContextLength
 			m.MaxCompletionTokens = defaultCopilotMaxCompletionTokens
 		}
+		if len(entry.SupportedEndpoints) > 0 {
+			m.SupportedEndpoints = append([]string(nil), entry.SupportedEndpoints...)
+		}
+		applyGitHubCopilotCapabilities(m, entry.Capabilities)
 
 		models = append(models, m)
 	}

@@ -509,6 +509,7 @@ func GetGitHubCopilotModels() []*ModelInfo {
 			ContextLength:       200000,
 			MaxCompletionTokens: 64000,
 			SupportedEndpoints:  []string{"/chat/completions"},
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, Levels: []string{"low", "medium", "high"}},
 		},
 		{
 			ID:                  "claude-sonnet-4",
@@ -545,6 +546,7 @@ func GetGitHubCopilotModels() []*ModelInfo {
 			ContextLength:       200000,
 			MaxCompletionTokens: 64000,
 			SupportedEndpoints:  []string{"/chat/completions"},
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, Levels: []string{"low", "medium", "high"}},
 		},
 		{
 			ID:                  "gemini-2.5-pro",
