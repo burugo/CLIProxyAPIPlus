@@ -184,11 +184,6 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 		httpReq.Header.Set("Copilot-Vision-Request", "true")
 	}
 
-	log.WithFields(log.Fields{
-		"model":       req.Model,
-		"X-Initiator": httpReq.Header.Get("X-Initiator"),
-	}).Debug("github-copilot: request headers |")
-
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
 		authID = auth.ID
@@ -348,11 +343,6 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 	if hasVision {
 		httpReq.Header.Set("Copilot-Vision-Request", "true")
 	}
-
-	log.WithFields(log.Fields{
-		"model":       req.Model,
-		"X-Initiator": httpReq.Header.Get("X-Initiator"),
-	}).Debug("github-copilot: request headers |")
 
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
@@ -581,11 +571,18 @@ func (e *GitHubCopilotExecutor) applyHeaders(r *http.Request, apiToken string, b
 	r.Header.Set("Accept-Language", copilotAcceptLang)
 
 	initiator := "user"
+	initiatorReason := ""
 	if detectSubagent(body) {
 		initiator = "agent"
+		initiatorReason = "subagent"
 	} else if role := detectLastConversationRole(body); role == "assistant" || role == "tool" {
 		initiator = "agent"
+		initiatorReason = "last_role=" + role
 	}
+	log.WithFields(log.Fields{
+		"initiator": initiator,
+		"reason":    initiatorReason,
+	}).Debug("github-copilot: X-Initiator resolved |")
 	r.Header.Set("X-Initiator", initiator)
 }
 
