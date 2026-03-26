@@ -592,3 +592,46 @@ func TestDetectVisionContent_NoMessages(t *testing.T) {
 		t.Fatal("expected no vision content when messages field is absent")
 	}
 }
+
+// --- Tests for Claude-family /v1/messages routing ---
+
+func TestShouldUseGitHubCopilotClaudeMessages_ClaudeFamily(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		model string
+		want  bool
+	}{
+		{"claude-opus-4.6", true},
+		{"claude-sonnet-4.6", true},
+		{"claude-haiku-4.5", true},
+		{"claude-3-5-sonnet", true},
+		{"claude-opus-4.6(high)", true},
+		{"gpt-4o", false},
+		{"gpt-5-codex", false},
+		{"gemini-2.5-pro", false},
+		{"o3", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			t.Parallel()
+			got := shouldUseGitHubCopilotClaudeMessages(tt.model)
+			if got != tt.want {
+				t.Fatalf("shouldUseGitHubCopilotClaudeMessages(%q) = %v, want %v", tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShouldUseGitHubCopilotClaudeMessages_DoesNotAffectResponsesEndpoint(t *testing.T) {
+	t.Parallel()
+	// A claude model should NOT trigger useGitHubCopilotResponsesEndpoint
+	// because the caller should check shouldUseGitHubCopilotClaudeMessages first.
+	// But useGitHubCopilotResponsesEndpoint itself doesn't know about Claude messages,
+	// so verify GPT/Codex models still route correctly.
+	if !useGitHubCopilotResponsesEndpoint(sdktranslator.FromString("openai-response"), "claude-opus-4.6") {
+		t.Fatal("openai-response source format should still return true regardless of model")
+	}
+	if !useGitHubCopilotResponsesEndpoint(sdktranslator.FromString("openai"), "gpt-5-codex") {
+		t.Fatal("codex model should still use /responses")
+	}
+}
