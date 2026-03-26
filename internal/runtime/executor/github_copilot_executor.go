@@ -47,6 +47,7 @@ const (
 	copilotAcceptLang      = "*"
 	copilotInteractionType = "conversation-agent"
 	copilotUserAgentLibVer = "electron-fetch"
+	copilotClaudeAnthrBeta = "advanced-tool-use-2025-11-20"
 )
 
 // GitHubCopilotExecutor handles requests to the GitHub Copilot API.
@@ -153,15 +154,12 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 	if err != nil {
 		return resp, err
 	}
+	body = applyGitHubCopilotClaudeAdaptiveThinking(req.Model, body, originalPayload)
 
-	if useClaudeMessages {
-		body = applyGitHubCopilotClaudeAdaptiveThinking(req.Model, body, originalPayload)
-	} else if useResponses {
-		body = applyGitHubCopilotClaudeAdaptiveThinking(req.Model, body, originalPayload)
+	if useResponses {
 		body = normalizeGitHubCopilotResponsesInput(body)
 		body = normalizeGitHubCopilotResponsesTools(body)
-	} else {
-		body = applyGitHubCopilotClaudeAdaptiveThinking(req.Model, body, originalPayload)
+	} else if !useClaudeMessages {
 		body = normalizeGitHubCopilotChatTools(body)
 	}
 	requestedModel := payloadRequestedModel(opts, req.Model)
@@ -174,6 +172,9 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 		return resp, err
 	}
 	e.applyHeaders(httpReq, apiToken, body)
+	if useClaudeMessages {
+		httpReq.Header.Set("Anthropic-Beta", copilotClaudeAnthrBeta)
+	}
 
 	// Add Copilot-Vision-Request header if the request contains vision content
 	if hasVision {
@@ -306,15 +307,12 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 	if err != nil {
 		return nil, err
 	}
+	body = applyGitHubCopilotClaudeAdaptiveThinking(req.Model, body, originalPayload)
 
-	if useClaudeMessages {
-		body = applyGitHubCopilotClaudeAdaptiveThinking(req.Model, body, originalPayload)
-	} else if useResponses {
-		body = applyGitHubCopilotClaudeAdaptiveThinking(req.Model, body, originalPayload)
+	if useResponses {
 		body = normalizeGitHubCopilotResponsesInput(body)
 		body = normalizeGitHubCopilotResponsesTools(body)
-	} else {
-		body = applyGitHubCopilotClaudeAdaptiveThinking(req.Model, body, originalPayload)
+	} else if !useClaudeMessages {
 		body = normalizeGitHubCopilotChatTools(body)
 	}
 	requestedModel := payloadRequestedModel(opts, req.Model)
@@ -331,6 +329,9 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 		return nil, err
 	}
 	e.applyHeaders(httpReq, apiToken, body)
+	if useClaudeMessages {
+		httpReq.Header.Set("Anthropic-Beta", copilotClaudeAnthrBeta)
+	}
 
 	// Add Copilot-Vision-Request header if the request contains vision content
 	if hasVision {
@@ -580,9 +581,25 @@ func detectLastConversationRole(body []byte) string {
 	if messages := gjson.GetBytes(body, "messages"); messages.Exists() && messages.IsArray() {
 		arr := messages.Array()
 		for i := len(arr) - 1; i >= 0; i-- {
-			if role := arr[i].Get("role").String(); role != "" {
-				return role
+			role := arr[i].Get("role").String()
+			if role == "" {
+				continue
 			}
+			// In Claude format, tool_result blocks arrive under role=user
+			// and tool_use blocks under role=assistant. Detect these so
+			// the caller treats them as agent-initiated rather than
+			// genuine user turns.
+			if content := arr[i].Get("content"); content.IsArray() {
+				for _, block := range content.Array() {
+					switch block.Get("type").String() {
+					case "tool_use":
+						return "assistant"
+					case "tool_result":
+						return "tool"
+					}
+				}
+			}
+			return role
 		}
 	}
 

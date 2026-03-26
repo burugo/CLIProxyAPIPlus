@@ -480,6 +480,28 @@ func TestApplyHeaders_XInitiator_InputArrayLastFunctionCallOutput(t *testing.T) 
 	}
 }
 
+func TestApplyHeaders_XInitiator_ClaudeNativeToolResult(t *testing.T) {
+	t.Parallel()
+	e := &GitHubCopilotExecutor{}
+	req, _ := http.NewRequest(http.MethodPost, "https://example.com", nil)
+	body := []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]},{"role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"Read","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_1","content":"file contents"}]}]}`)
+	e.applyHeaders(req, "token", body)
+	if got := req.Header.Get("X-Initiator"); got != "agent" {
+		t.Fatalf("X-Initiator = %q, want agent (Claude native tool_result under role=user)", got)
+	}
+}
+
+func TestApplyHeaders_XInitiator_ClaudeNativeToolUse(t *testing.T) {
+	t.Parallel()
+	e := &GitHubCopilotExecutor{}
+	req, _ := http.NewRequest(http.MethodPost, "https://example.com", nil)
+	body := []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]},{"role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"Read","input":{}}]}]}`)
+	e.applyHeaders(req, "token", body)
+	if got := req.Header.Get("X-Initiator"); got != "agent" {
+		t.Fatalf("X-Initiator = %q, want agent (Claude native tool_use under role=assistant)", got)
+	}
+}
+
 // --- Tests for subagent detection ---
 
 func TestApplyHeaders_XInitiator_ClaudeCodeSubagent(t *testing.T) {
@@ -633,5 +655,82 @@ func TestShouldUseGitHubCopilotClaudeMessages_DoesNotAffectResponsesEndpoint(t *
 	}
 	if !useGitHubCopilotResponsesEndpoint(sdktranslator.FromString("openai"), "gpt-5-codex") {
 		t.Fatal("codex model should still use /responses")
+	}
+}
+
+// --- Tests for anthropic-beta header on Claude /v1/messages path ---
+
+func TestApplyHeaders_ClaudeMessagesAnthropicBeta(t *testing.T) {
+	t.Parallel()
+	// Simulate the call-site pattern: applyHeaders + conditional anthropic-beta.
+	e := &GitHubCopilotExecutor{}
+	req, _ := http.NewRequest(http.MethodPost, "https://example.com/v1/messages", nil)
+	e.applyHeaders(req, "token", nil)
+	// At the call site, anthropic-beta is added when useClaudeMessages is true.
+	req.Header.Set("Anthropic-Beta", copilotClaudeAnthrBeta)
+
+	if got := req.Header.Get("Anthropic-Beta"); got != "advanced-tool-use-2025-11-20" {
+		t.Fatalf("Anthropic-Beta = %q, want advanced-tool-use-2025-11-20", got)
+	}
+}
+
+func TestApplyHeaders_NonClaudeNoAnthropicBeta(t *testing.T) {
+	t.Parallel()
+	e := &GitHubCopilotExecutor{}
+	req, _ := http.NewRequest(http.MethodPost, "https://example.com/chat/completions", nil)
+	e.applyHeaders(req, "token", nil)
+	// Non-Claude path should NOT set anthropic-beta.
+	if got := req.Header.Get("Anthropic-Beta"); got != "" {
+		t.Fatalf("Anthropic-Beta should be empty for non-Claude path, got %q", got)
+	}
+}
+
+// --- Tests for Claude usage parsing ---
+
+func TestParseClaudeUsage_BasicUsage(t *testing.T) {
+	t.Parallel()
+	data := []byte(`{"usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":10}}`)
+	detail := parseClaudeUsage(data)
+	if detail.InputTokens != 100 {
+		t.Fatalf("InputTokens = %d, want 100", detail.InputTokens)
+	}
+	if detail.OutputTokens != 50 {
+		t.Fatalf("OutputTokens = %d, want 50", detail.OutputTokens)
+	}
+	if detail.CachedTokens != 10 {
+		t.Fatalf("CachedTokens = %d, want 10", detail.CachedTokens)
+	}
+	if detail.TotalTokens != 150 {
+		t.Fatalf("TotalTokens = %d, want 150", detail.TotalTokens)
+	}
+}
+
+func TestParseClaudeUsage_NoUsage(t *testing.T) {
+	t.Parallel()
+	data := []byte(`{"content":[{"type":"text","text":"hello"}]}`)
+	detail := parseClaudeUsage(data)
+	if detail.TotalTokens != 0 {
+		t.Fatalf("TotalTokens = %d, want 0 for missing usage", detail.TotalTokens)
+	}
+}
+
+func TestParseClaudeStreamUsage_MessageDelta(t *testing.T) {
+	t.Parallel()
+	line := []byte(`data: {"type":"message_delta","usage":{"input_tokens":200,"output_tokens":80}}`)
+	detail, ok := parseClaudeStreamUsage(line)
+	if !ok {
+		t.Fatal("expected parseClaudeStreamUsage to return ok=true")
+	}
+	if detail.TotalTokens != 280 {
+		t.Fatalf("TotalTokens = %d, want 280", detail.TotalTokens)
+	}
+}
+
+func TestParseClaudeStreamUsage_NoUsage(t *testing.T) {
+	t.Parallel()
+	line := []byte(`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}`)
+	_, ok := parseClaudeStreamUsage(line)
+	if ok {
+		t.Fatal("expected parseClaudeStreamUsage to return ok=false for content_block_delta without usage")
 	}
 }
