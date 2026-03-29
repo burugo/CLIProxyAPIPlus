@@ -7,6 +7,38 @@ import (
 	"time"
 )
 
+func TestShouldCompressCodexRequestBody(t *testing.T) {
+	t.Run("default upstream", func(t *testing.T) {
+		if !shouldCompressCodexRequestBody("") {
+			t.Fatal("expected default codex upstream to enable zstd compression")
+		}
+	})
+
+	t.Run("native codex upstream", func(t *testing.T) {
+		if !shouldCompressCodexRequestBody("https://chatgpt.com/backend-api/codex") {
+			t.Fatal("expected native codex upstream to enable zstd compression")
+		}
+	})
+
+	t.Run("gitlab gateway", func(t *testing.T) {
+		if shouldCompressCodexRequestBody("https://gitlab.example.com/v1/proxy/openai/v1") {
+			t.Fatal("expected gitlab gateway to disable zstd compression")
+		}
+	})
+
+	t.Run("non codex chatgpt path", func(t *testing.T) {
+		if shouldCompressCodexRequestBody("https://chatgpt.com/backend-api/other") {
+			t.Fatal("expected non-codex chatgpt path to disable zstd compression")
+		}
+	})
+
+	t.Run("invalid base url", func(t *testing.T) {
+		if shouldCompressCodexRequestBody("://invalid") {
+			t.Fatal("expected invalid base url to disable zstd compression")
+		}
+	})
+}
+
 func TestParseCodexRetryAfter(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 

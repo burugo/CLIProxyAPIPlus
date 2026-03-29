@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -143,6 +144,9 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		AuthType:  authType,
 		AuthValue: authValue,
 	})
+	if shouldCompressCodexRequestBody(baseURL) {
+		compressZstdBody(httpReq)
+	}
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
 	httpResp, err := httpClient.Do(httpReq)
 	if err != nil {
@@ -248,6 +252,9 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 		AuthType:  authType,
 		AuthValue: authValue,
 	})
+	if shouldCompressCodexRequestBody(baseURL) {
+		compressZstdBody(httpReq)
+	}
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
 	httpResp, err := httpClient.Do(httpReq)
 	if err != nil {
@@ -344,6 +351,9 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		AuthType:  authType,
 		AuthValue: authValue,
 	})
+	if shouldCompressCodexRequestBody(baseURL) {
+		compressZstdBody(httpReq)
+	}
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
 	httpResp, err := httpClient.Do(httpReq)
 	if err != nil {
@@ -833,4 +843,19 @@ func compressZstdBody(r *http.Request) {
 	r.Body = io.NopCloser(bytes.NewReader(buf.Bytes()))
 	r.ContentLength = int64(buf.Len())
 	r.Header.Set("Content-Encoding", "zstd")
+}
+
+func shouldCompressCodexRequestBody(baseURL string) bool {
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		return true
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return false
+	}
+	if !strings.EqualFold(parsed.Hostname(), "chatgpt.com") {
+		return false
+	}
+	return strings.TrimRight(parsed.EscapedPath(), "/") == "/backend-api/codex"
 }
