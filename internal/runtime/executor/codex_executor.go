@@ -13,6 +13,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 	codexauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/codex"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
@@ -142,7 +143,6 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		AuthType:  authType,
 		AuthValue: authValue,
 	})
-	compressZstdBody(httpReq)
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
 	httpResp, err := httpClient.Do(httpReq)
 	if err != nil {
@@ -248,7 +248,6 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 		AuthType:  authType,
 		AuthValue: authValue,
 	})
-	compressZstdBody(httpReq)
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
 	httpResp, err := httpClient.Do(httpReq)
 	if err != nil {
@@ -345,8 +344,6 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		AuthType:  authType,
 		AuthValue: authValue,
 	})
-
-	compressZstdBody(httpReq)
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
 	httpResp, err := httpClient.Do(httpReq)
 	if err != nil {
@@ -668,7 +665,11 @@ func applyCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, token string, s
 		r.Header["session_id"] = []string{uuid.NewString()}
 	}
 
-	r.Header.Set("Accept", "*/*")
+	if stream {
+		r.Header.Set("Accept", "text/event-stream")
+	} else {
+		r.Header.Set("Accept", "application/json")
+	}
 	r.Header.Set("Connection", "Keep-Alive")
 
 	isAPIKey := false
@@ -677,12 +678,15 @@ func applyCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, token string, s
 			isAPIKey = true
 		}
 	}
+	if originator := strings.TrimSpace(ginHeaders.Get("Originator")); originator != "" {
+		r.Header.Set("Originator", originator)
+	} else if !isAPIKey {
+		r.Header.Set("Originator", codexOriginator)
+	}
 	if !isAPIKey {
-		// Use raw map access to preserve exact casing for originator and ChatGPT-Account-Id
-		r.Header["originator"] = []string{"opencode"}
 		if auth != nil && auth.Metadata != nil {
 			if accountID, ok := auth.Metadata["account_id"].(string); ok {
-				r.Header["ChatGPT-Account-Id"] = []string{accountID}
+				r.Header.Set("Chatgpt-Account-Id", accountID)
 			}
 		}
 	}

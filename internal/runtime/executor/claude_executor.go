@@ -813,9 +813,10 @@ func applyClaudeHeaders(r *http.Request, auth *cliproxyauth.Auth, apiKey string,
 			hasClaude1MHeader = true
 		}
 	}
+	forceContext1M := auth != nil && auth.Attributes != nil && strings.EqualFold(strings.TrimSpace(auth.Attributes["gitlab_duo_force_context_1m"]), "true")
 
 	// Merge extra betas from request body and request flags.
-	if len(extraBetas) > 0 || hasClaude1MHeader {
+	if len(extraBetas) > 0 || hasClaude1MHeader || forceContext1M {
 		existingSet := make(map[string]bool)
 		for _, b := range strings.Split(baseBetas, ",") {
 			betaName := strings.TrimSpace(b)
@@ -830,7 +831,7 @@ func applyClaudeHeaders(r *http.Request, auth *cliproxyauth.Auth, apiKey string,
 				existingSet[beta] = true
 			}
 		}
-		if hasClaude1MHeader && !existingSet["context-1m-2025-08-07"] {
+		if (hasClaude1MHeader || forceContext1M) && !existingSet["context-1m-2025-08-07"] {
 			baseBetas += ",context-1m-2025-08-07"
 		}
 	}
