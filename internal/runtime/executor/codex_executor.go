@@ -840,8 +840,12 @@ func compressZstdBody(r *http.Request) {
 		r.Body = io.NopCloser(bytes.NewReader(raw))
 		return
 	}
-	r.Body = io.NopCloser(bytes.NewReader(buf.Bytes()))
-	r.ContentLength = int64(buf.Len())
+	compressed := append([]byte(nil), buf.Bytes()...)
+	r.Body = io.NopCloser(bytes.NewReader(compressed))
+	r.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(compressed)), nil
+	}
+	r.ContentLength = int64(len(compressed))
 	r.Header.Set("Content-Encoding", "zstd")
 }
 

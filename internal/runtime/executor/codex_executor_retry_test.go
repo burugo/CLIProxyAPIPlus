@@ -1,10 +1,15 @@
 package executor
 
 import (
+	"bytes"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 func TestShouldCompressCodexRequestBody(t *testing.T) {
@@ -37,6 +42,61 @@ func TestShouldCompressCodexRequestBody(t *testing.T) {
 			t.Fatal("expected invalid base url to disable zstd compression")
 		}
 	})
+}
+
+func TestCompressZstdBodyUpdatesGetBodyForRedirectReplays(t *testing.T) {
+	var redirectedEncoding string
+	var redirectedBody []byte
+
+	final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirectedEncoding = r.Header.Get("Content-Encoding")
+		var err error
+		redirectedBody, err = io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read redirected body: %v", err)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer final.Close()
+
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, final.URL, http.StatusTemporaryRedirect)
+	}))
+	defer redirect.Close()
+
+	raw := []byte(`{"message":"hello"}`)
+	req, err := http.NewRequest(http.MethodPost, redirect.URL, bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("http.NewRequest: %v", err)
+	}
+	compressZstdBody(req)
+
+	resp, err := final.Client().Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status code = %d, want %d", resp.StatusCode, http.StatusNoContent)
+	}
+	if redirectedEncoding != "zstd" {
+		t.Fatalf("redirected Content-Encoding = %q, want %q", redirectedEncoding, "zstd")
+	}
+
+	decoder, err := zstd.NewReader(bytes.NewReader(redirectedBody))
+	if err != nil {
+		t.Fatalf("zstd.NewReader: %v", err)
+	}
+	defer decoder.Close()
+
+	decoded, err := io.ReadAll(decoder)
+	if err != nil {
+		t.Fatalf("decode redirected body: %v", err)
+	}
+	if !bytes.Equal(decoded, raw) {
+		t.Fatalf("decoded redirected body = %q, want %q", decoded, raw)
+	}
 }
 
 func TestParseCodexRetryAfter(t *testing.T) {
