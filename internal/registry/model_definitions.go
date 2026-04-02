@@ -478,6 +478,19 @@ func GetGitHubCopilotModels() []*ModelInfo {
 			Thinking:            &ThinkingSupport{Levels: []string{"none", "low", "medium", "high", "xhigh"}},
 		},
 		{
+			ID:                  "gpt-5.4-mini",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "github-copilot",
+			Type:                "github-copilot",
+			DisplayName:         "GPT-5.4 mini",
+			Description:         "OpenAI GPT-5.4 mini via GitHub Copilot",
+			ContextLength:       200000,
+			MaxCompletionTokens: 32768,
+			SupportedEndpoints:  []string{"/responses"},
+			Thinking:            &ThinkingSupport{Levels: []string{"none", "low", "medium", "high", "xhigh"}},
+		},
+		{
 			ID:                  "claude-haiku-4.5",
 			Object:              "model",
 			Created:             now,
@@ -573,6 +586,7 @@ func GetGitHubCopilotModels() []*ModelInfo {
 			Description:         "Google Gemini 2.5 Pro via GitHub Copilot",
 			ContextLength:       1048576,
 			MaxCompletionTokens: 65536,
+			SupportedEndpoints:  []string{"/chat/completions"},
 		},
 		{
 			ID:                  "gemini-3-pro-preview",
@@ -584,6 +598,7 @@ func GetGitHubCopilotModels() []*ModelInfo {
 			Description:         "Google Gemini 3 Pro Preview via GitHub Copilot",
 			ContextLength:       1048576,
 			MaxCompletionTokens: 65536,
+			SupportedEndpoints:  []string{"/chat/completions"},
 		},
 		{
 			ID:                  "gemini-3.1-pro-preview",
@@ -593,8 +608,9 @@ func GetGitHubCopilotModels() []*ModelInfo {
 			Type:                "github-copilot",
 			DisplayName:         "Gemini 3.1 Pro (Preview)",
 			Description:         "Google Gemini 3.1 Pro Preview via GitHub Copilot",
-			ContextLength:       1048576,
+			ContextLength:       173000,
 			MaxCompletionTokens: 65536,
+			SupportedEndpoints:  []string{"/chat/completions"},
 		},
 		{
 			ID:                  "gemini-3-flash-preview",
@@ -604,8 +620,9 @@ func GetGitHubCopilotModels() []*ModelInfo {
 			Type:                "github-copilot",
 			DisplayName:         "Gemini 3 Flash (Preview)",
 			Description:         "Google Gemini 3 Flash Preview via GitHub Copilot",
-			ContextLength:       1048576,
+			ContextLength:       173000,
 			MaxCompletionTokens: 65536,
+			SupportedEndpoints:  []string{"/chat/completions"},
 		},
 		{
 			ID:                  "grok-code-fast-1",
