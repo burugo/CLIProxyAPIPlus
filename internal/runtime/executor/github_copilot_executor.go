@@ -572,12 +572,12 @@ func (e *GitHubCopilotExecutor) applyHeaders(r *http.Request, apiToken string, b
 
 	initiator := "user"
 	initiatorReason := ""
-	if detectSubagent(body) {
-		initiator = "agent"
-		initiatorReason = "subagent"
-	} else if role := detectLastConversationRole(body); role == "assistant" || role == "tool" {
+	if role := detectLastConversationRole(body); role == "assistant" || role == "tool" {
 		initiator = "agent"
 		initiatorReason = "last_role=" + role
+	} else if detectSubagent(body) {
+		initiator = "agent"
+		initiatorReason = "subagent"
 	}
 	log.WithFields(log.Fields{
 		"initiator": initiator,
@@ -656,21 +656,26 @@ func detectSubagent(body []byte) bool {
 	userMessageCount := 0
 	lastMessageText := ""
 	if len(messageArray) > 0 {
-		lastMessage := messageArray[len(messageArray)-1]
-		lastMessageText = lastMessage.Get("content").String()
-		if lastMessageText == "" {
-			content := lastMessage.Get("content")
-			if content.IsArray() {
-				for _, part := range content.Array() {
-					lastMessageText += part.Get("text").String()
-				}
-			}
-		}
+		lastMessageText = collectTextFromNode(messageArray[len(messageArray)-1].Get("content"))
 	}
 	for _, msg := range messageArray {
-		if msg.Get("role").String() == "user" {
-			userMessageCount++
+		if msg.Get("role").String() != "user" {
+			continue
 		}
+		content := msg.Get("content")
+		if content.IsArray() {
+			hasToolResult := false
+			for _, block := range content.Array() {
+				if block.Get("type").String() == "tool_result" {
+					hasToolResult = true
+					break
+				}
+			}
+			if hasToolResult {
+				continue
+			}
+		}
+		userMessageCount++
 	}
 	if hasSubagentMarkers(lastMessageText) {
 		return true
@@ -730,39 +735,44 @@ func (e *GitHubCopilotExecutor) normalizeModel(model string, body []byte) []byte
 }
 
 func normalizeGitHubCopilotClaudeThinking(model string, body, original []byte) []byte {
-	baseModel := strings.ToLower(strings.TrimSpace(thinking.ParseSuffix(model).ModelName))
-	if baseModel != "claude-opus-4.6" && baseModel != "claude-sonnet-4.6" {
+	thinkingType, effort, ok := resolveGitHubCopilotClaudeThinkingModeAndEffort(model, body, original)
+	if !ok {
 		return body
 	}
-	if shouldDisableGitHubCopilotClaudeThinking(body, original) {
-		body, _ = sjson.DeleteBytes(body, "reasoning_effort")
-		body, _ = sjson.DeleteBytes(body, "reasoning.effort")
-		body, _ = sjson.SetBytes(body, "thinking.type", "disabled")
-		body, _ = sjson.DeleteBytes(body, "thinking.budget_tokens")
+	body, _ = sjson.DeleteBytes(body, "reasoning_effort")
+	body, _ = sjson.DeleteBytes(body, "reasoning.effort")
+	body, _ = sjson.SetBytes(body, "thinking.type", thinkingType)
+	body, _ = sjson.DeleteBytes(body, "thinking.budget_tokens")
+	if effort == "" {
 		body, _ = sjson.DeleteBytes(body, "output_config.effort")
 		if oc := gjson.GetBytes(body, "output_config"); oc.Exists() && oc.IsObject() && len(oc.Map()) == 0 {
 			body, _ = sjson.DeleteBytes(body, "output_config")
 		}
 		return body
 	}
+	body, _ = sjson.SetBytes(body, "output_config.effort", effort)
+	return body
+}
+
+func resolveGitHubCopilotClaudeThinkingModeAndEffort(model string, body, original []byte) (string, string, bool) {
+	baseModel := strings.ToLower(strings.TrimSpace(thinking.ParseSuffix(model).ModelName))
+	if !strings.HasPrefix(baseModel, "claude-opus-") {
+		return "", "", false
+	}
+	if shouldDisableGitHubCopilotClaudeThinking(body, original) {
+		return "disabled", "", true
+	}
 	if !hasGitHubCopilotClaudeThinkingIntent(model, body, original) {
-		return body
+		return "", "", false
 	}
 	if effort := gjson.GetBytes(body, "output_config.effort").String(); effort != "" {
-		body, _ = sjson.SetBytes(body, "thinking.type", "adaptive")
-		body, _ = sjson.DeleteBytes(body, "thinking.budget_tokens")
-		return body
+		return "adaptive", effort, true
 	}
 	effort := deriveGitHubCopilotClaudeEffort(model, body, original)
 	if effort == "" {
 		effort = "high"
 	}
-	body, _ = sjson.DeleteBytes(body, "reasoning_effort")
-	body, _ = sjson.DeleteBytes(body, "reasoning.effort")
-	body, _ = sjson.SetBytes(body, "thinking.type", "adaptive")
-	body, _ = sjson.DeleteBytes(body, "thinking.budget_tokens")
-	body, _ = sjson.SetBytes(body, "output_config.effort", effort)
-	return body
+	return "adaptive", effort, true
 }
 
 func hasGitHubCopilotClaudeThinkingIntent(model string, body, original []byte) bool {
@@ -894,6 +904,9 @@ func useGitHubCopilotResponsesEndpoint(sourceFormat sdktranslator.Format, model 
 		return len(info.SupportedEndpoints) > 0 && !containsEndpoint(info.SupportedEndpoints, githubCopilotChatPath) && containsEndpoint(info.SupportedEndpoints, githubCopilotResponsesPath)
 	}
 	if info := lookupGitHubCopilotStaticModelInfo(baseModel); info != nil {
+		return len(info.SupportedEndpoints) > 0 && !containsEndpoint(info.SupportedEndpoints, githubCopilotChatPath) && containsEndpoint(info.SupportedEndpoints, githubCopilotResponsesPath)
+	}
+	if info := lookupGitHubCopilotStaticModelInfo(model); info != nil {
 		return len(info.SupportedEndpoints) > 0 && !containsEndpoint(info.SupportedEndpoints, githubCopilotChatPath) && containsEndpoint(info.SupportedEndpoints, githubCopilotResponsesPath)
 	}
 	return strings.Contains(baseModel, "codex")

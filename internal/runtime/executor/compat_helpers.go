@@ -34,6 +34,14 @@ func parseOpenAIResponsesStreamUsage(line []byte) (usage.Detail, bool) {
 	return helps.ParseOpenAIStreamUsage(line)
 }
 
+func parseClaudeUsage(data []byte) usage.Detail {
+	return helps.ParseClaudeUsage(data)
+}
+
+func parseClaudeStreamUsage(line []byte) (usage.Detail, bool) {
+	return helps.ParseClaudeStreamUsage(line)
+}
+
 func getTokenizer(model string) (tokenizer.Codec, error) {
 	return helps.TokenizerForModel(model)
 }

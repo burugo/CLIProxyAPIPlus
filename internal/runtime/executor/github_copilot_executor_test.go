@@ -179,14 +179,17 @@ func TestNormalizeGitHubCopilotClaudeThinking_DerivesEffortFromOriginalRequest(t
 	}
 }
 
-func TestNormalizeGitHubCopilotClaudeThinking_DefaultsToHighForAdaptiveThinking(t *testing.T) {
+func TestNormalizeGitHubCopilotClaudeThinking_DoesNotEnableThinkingForNonOpusClaude(t *testing.T) {
 	t.Parallel()
 
 	body := []byte(`{"model":"claude-sonnet-4.6","thinking":{"type":"adaptive"}}`)
 	got := normalizeGitHubCopilotClaudeThinking("claude-sonnet-4.6", body, nil)
 
-	if effort := gjson.GetBytes(got, "output_config.effort").String(); effort != "high" {
-		t.Fatalf("output_config.effort = %q, want high", effort)
+	if thinkingType := gjson.GetBytes(got, "thinking.type").String(); thinkingType != "adaptive" {
+		t.Fatalf("thinking.type = %q, want adaptive passthrough", thinkingType)
+	}
+	if gjson.GetBytes(got, "output_config.effort").Exists() {
+		t.Fatalf("output_config.effort should not be synthesized for non-opus claude, body=%s", string(got))
 	}
 }
 
@@ -221,6 +224,140 @@ func TestNormalizeGitHubCopilotClaudeThinking_DisablesZeroBudgetThinking(t *test
 	}
 	if gjson.GetBytes(got, "output_config.effort").Exists() {
 		t.Fatalf("output_config.effort should be removed, body=%s", string(got))
+	}
+}
+
+func TestResolveGitHubCopilotClaudeThinkingModeAndEffort(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		model      string
+		body       []byte
+		original   []byte
+		wantType   string
+		wantEffort string
+		wantOK     bool
+	}{
+		{
+			name:     "non claude model ignored",
+			model:    "gpt-4o",
+			body:     []byte(`{"model":"gpt-4o","thinking":{"type":"enabled","budget_tokens":1024}}`),
+			wantOK:   false,
+		},
+		{
+			name:       "reasoning effort in body maps to adaptive effort",
+			model:      "claude-opus-4.6",
+			body:       []byte(`{"model":"claude-opus-4.6","reasoning_effort":"medium"}`),
+			wantType:   "adaptive",
+			wantEffort: "medium",
+			wantOK:     true,
+		},
+		{
+			name:       "suffix maps to adaptive effort",
+			model:      "claude-opus-4.6(medium)",
+			body:       []byte(`{"model":"claude-opus-4.6"}`),
+			wantType:   "adaptive",
+			wantEffort: "medium",
+			wantOK:     true,
+		},
+		{
+			name:       "original disabled wins for opus",
+			model:      "claude-opus-4.6",
+			body:       []byte(`{"model":"claude-opus-4.6","reasoning_effort":"high"}`),
+			original:   []byte(`{"thinking":{"type":"disabled"}}`),
+			wantType:   "disabled",
+			wantEffort: "",
+			wantOK:     true,
+		},
+		{
+			name:       "non opus claude ignored",
+			model:      "claude-sonnet-4.6",
+			body:       []byte(`{"model":"claude-sonnet-4.6","reasoning_effort":"high"}`),
+			wantType:   "",
+			wantEffort: "",
+			wantOK:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotType, gotEffort, gotOK := resolveGitHubCopilotClaudeThinkingModeAndEffort(tt.model, tt.body, tt.original)
+			if gotType != tt.wantType || gotEffort != tt.wantEffort || gotOK != tt.wantOK {
+				t.Fatalf("got (type=%q, effort=%q, ok=%v), want (type=%q, effort=%q, ok=%v)", gotType, gotEffort, gotOK, tt.wantType, tt.wantEffort, tt.wantOK)
+			}
+		})
+	}
+}
+
+func TestNormalizeGitHubCopilotClaudeThinking_PreservesBehaviorAcrossInputShapes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		model         string
+		body          []byte
+		original      []byte
+		wantType      string
+		wantEffort    string
+		wantHasBudget bool
+	}{
+		{
+			name:          "non claude model passthrough",
+			model:         "gpt-4o",
+			body:          []byte(`{"model":"gpt-4o","thinking":{"type":"enabled","budget_tokens":1024}}`),
+			wantType:      "enabled",
+			wantEffort:    "",
+			wantHasBudget: true,
+		},
+		{
+			name:          "reasoning effort in body maps to adaptive effort",
+			model:         "claude-opus-4.6",
+			body:          []byte(`{"model":"claude-opus-4.6","reasoning_effort":"medium"}`),
+			wantType:      "adaptive",
+			wantEffort:    "medium",
+			wantHasBudget: false,
+		},
+		{
+			name:          "suffix maps to adaptive effort",
+			model:         "claude-opus-4.6(medium)",
+			body:          []byte(`{"model":"claude-opus-4.6"}`),
+			wantType:      "adaptive",
+			wantEffort:    "medium",
+			wantHasBudget: false,
+		},
+		{
+			name:          "original disabled wins",
+			model:         "claude-opus-4.6",
+			body:          []byte(`{"model":"claude-opus-4.6","reasoning_effort":"high"}`),
+			original:      []byte(`{"thinking":{"type":"disabled"}}`),
+			wantType:      "disabled",
+			wantEffort:    "",
+			wantHasBudget: false,
+		},
+		{
+			name:          "non opus claude passthrough",
+			model:         "claude-sonnet-4.6",
+			body:          []byte(`{"model":"claude-sonnet-4.6","reasoning_effort":"high"}`),
+			wantType:      "",
+			wantEffort:    "",
+			wantHasBudget: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := normalizeGitHubCopilotClaudeThinking(tt.model, tt.body, tt.original)
+			if thinkingType := gjson.GetBytes(got, "thinking.type").String(); thinkingType != tt.wantType {
+				t.Fatalf("thinking.type = %q, want %q; body=%s", thinkingType, tt.wantType, string(got))
+			}
+			if effort := gjson.GetBytes(got, "output_config.effort").String(); effort != tt.wantEffort {
+				t.Fatalf("output_config.effort = %q, want %q; body=%s", effort, tt.wantEffort, string(got))
+			}
+			if hasBudget := gjson.GetBytes(got, "thinking.budget_tokens").Exists(); hasBudget != tt.wantHasBudget {
+				t.Fatalf("thinking.budget_tokens exists = %v, want %v; body=%s", hasBudget, tt.wantHasBudget, string(got))
+			}
+		})
 	}
 }
 
@@ -592,19 +729,19 @@ func TestDetectSubagent_Positive(t *testing.T) {
 	}
 }
 
-func TestDetectSubagent_PositiveWhenUserCountIsNotMultipleOfFive(t *testing.T) {
+func TestDetectSubagent_PositiveWhenUserCountIsNotMultipleOfTen(t *testing.T) {
 	t.Parallel()
 	body := []byte(`{"messages":[{"role":"system","content":"You are a helpful coding assistant."},{"role":"user","content":"hello"}]}`)
 	if !detectSubagent(body) {
-		t.Fatal("expected subagent detection when user message count is not a multiple of five")
+		t.Fatal("expected subagent detection when user message count is not a multiple of ten")
 	}
 }
 
-func TestDetectSubagent_NegativeWhenUserCountIsMultipleOfFive(t *testing.T) {
+func TestDetectSubagent_NegativeWhenUserCountIsMultipleOfTen(t *testing.T) {
 	t.Parallel()
-	body := []byte(`{"messages":[{"role":"user","content":"u1"},{"role":"assistant","content":"a1"},{"role":"user","content":"u2"},{"role":"assistant","content":"a2"},{"role":"user","content":"u3"},{"role":"assistant","content":"a3"},{"role":"user","content":"u4"},{"role":"assistant","content":"a4"},{"role":"user","content":"u5"}]}`)
+	body := []byte(`{"messages":[{"role":"user","content":"u1"},{"role":"assistant","content":"a1"},{"role":"user","content":"u2"},{"role":"assistant","content":"a2"},{"role":"user","content":"u3"},{"role":"assistant","content":"a3"},{"role":"user","content":"u4"},{"role":"assistant","content":"a4"},{"role":"user","content":"u5"},{"role":"assistant","content":"a5"},{"role":"user","content":"u6"},{"role":"assistant","content":"a6"},{"role":"user","content":"u7"},{"role":"assistant","content":"a7"},{"role":"user","content":"u8"},{"role":"assistant","content":"a8"},{"role":"user","content":"u9"},{"role":"assistant","content":"a9"},{"role":"user","content":"u10"}]}`)
 	if detectSubagent(body) {
-		t.Fatal("expected no subagent detection when user message count is a multiple of five")
+		t.Fatal("expected no subagent detection when user message count is a multiple of ten")
 	}
 }
 
@@ -612,6 +749,33 @@ func TestDetectSubagent_NegativeEmpty(t *testing.T) {
 	t.Parallel()
 	if detectSubagent(nil) {
 		t.Fatal("expected false for nil body")
+	}
+}
+
+func TestDetectSubagent_IgnoresUserToolResultForCount(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"u1"}]},{"role":"assistant","content":"a1"},{"role":"user","content":[{"type":"text","text":"u2"}]},{"role":"assistant","content":"a2"},{"role":"user","content":[{"type":"text","text":"u3"}]},{"role":"assistant","content":"a3"},{"role":"user","content":[{"type":"text","text":"u4"}]},{"role":"assistant","content":"a4"},{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"README.md"}]},{"role":"assistant","content":"a5"},{"role":"user","content":[{"type":"text","text":"u5"}]},{"role":"assistant","content":"a6"},{"role":"user","content":[{"type":"text","text":"u6"}]},{"role":"assistant","content":"a7"},{"role":"user","content":[{"type":"text","text":"u7"}]},{"role":"assistant","content":"a8"},{"role":"user","content":[{"type":"text","text":"u8"}]},{"role":"assistant","content":"a9"},{"role":"user","content":[{"type":"text","text":"u9"}]},{"role":"assistant","content":"a10"},{"role":"user","content":[{"type":"text","text":"u10"}]}]}`)
+	if detectSubagent(body) {
+		t.Fatal("expected tool_result under role=user to be excluded from user counting")
+	}
+}
+
+func TestDetectSubagent_IgnoresMixedUserToolResultForCount(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"u1"}]},{"role":"assistant","content":"a1"},{"role":"user","content":[{"type":"text","text":"u2"}]},{"role":"assistant","content":"a2"},{"role":"user","content":[{"type":"text","text":"u3"}]},{"role":"assistant","content":"a3"},{"role":"user","content":[{"type":"text","text":"u4"}]},{"role":"assistant","content":"a4"},{"role":"user","content":[{"type":"text","text":"user asked"},{"type":"tool_result","tool_use_id":"toolu_1","content":"README.md"}]},{"role":"assistant","content":"a5"},{"role":"user","content":[{"type":"text","text":"u5"}]},{"role":"assistant","content":"a6"},{"role":"user","content":[{"type":"text","text":"u6"}]},{"role":"assistant","content":"a7"},{"role":"user","content":[{"type":"text","text":"u7"}]},{"role":"assistant","content":"a8"},{"role":"user","content":[{"type":"text","text":"u8"}]},{"role":"assistant","content":"a9"},{"role":"user","content":[{"type":"text","text":"u9"}]},{"role":"assistant","content":"a10"},{"role":"user","content":[{"type":"text","text":"u10"}]}]}`)
+	if detectSubagent(body) {
+		t.Fatal("expected any tool_result under role=user to be excluded from user counting")
+	}
+}
+
+func TestApplyHeaders_XInitiator_PrefersLastRoleBeforeSubagentHeuristic(t *testing.T) {
+	t.Parallel()
+	e := &GitHubCopilotExecutor{}
+	req, _ := http.NewRequest(http.MethodPost, "https://example.com", nil)
+	body := []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]},{"role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"Read","input":{}}]}]}`)
+	e.applyHeaders(req, "token", body)
+	if got := req.Header.Get("X-Initiator"); got != "agent" {
+		t.Fatalf("X-Initiator = %q, want agent (last role should win before subagent heuristic)", got)
 	}
 }
 
