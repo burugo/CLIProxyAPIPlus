@@ -765,6 +765,29 @@ func TestNormalizeGitHubCopilotClaudeMessagesBody_StripsMetadata(t *testing.T) {
 	}
 }
 
+func TestNormalizeGitHubCopilotClaudeMessagesBody_StripsCacheControlScope(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{
+		"model": "claude-opus-4.6",
+		"system": [
+			{"type":"text","text":"billing"},
+			{"type":"text","text":"instructions","cache_control":{"type":"ephemeral","scope":"global"}}
+		],
+		"messages": [{"role":"user","content":[{"type":"text","text":"hello"}]}]
+	}`)
+
+	got := normalizeGitHubCopilotClaudeMessagesBody(body)
+	if gjson.GetBytes(got, "system.1.cache_control.scope").Exists() {
+		t.Fatal("system[1].cache_control.scope should be removed for GitHub Copilot Claude messages compatibility")
+	}
+	if cacheType := gjson.GetBytes(got, "system.1.cache_control.type").String(); cacheType != "ephemeral" {
+		t.Fatalf("system[1].cache_control.type = %q, want ephemeral", cacheType)
+	}
+	if text := gjson.GetBytes(got, "system.1.text").String(); text != "instructions" {
+		t.Fatalf("system[1].text = %q, want instructions", text)
+	}
+}
+
 // --- Tests for Claude usage parsing ---
 
 func TestParseClaudeUsage_BasicUsage(t *testing.T) {

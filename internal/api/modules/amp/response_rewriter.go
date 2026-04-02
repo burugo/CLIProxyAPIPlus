@@ -335,6 +335,7 @@ func SanitizeAmpRequestBody(body []byte) []byte {
 
 		var keepBlocks []interface{}
 		removedCount := 0
+		contentModified := false
 
 		for _, block := range content.Array() {
 			blockType := block.Get("type").String()
@@ -342,13 +343,25 @@ func SanitizeAmpRequestBody(body []byte) []byte {
 				sig := block.Get("signature")
 				if !sig.Exists() || sig.Type != gjson.String || strings.TrimSpace(sig.String()) == "" {
 					removedCount++
+					contentModified = true
 					continue
 				}
+			}
+			if blockType == "tool_use" && block.Get("signature").Exists() {
+				cleaned, err := sjson.Delete(block.Raw, "signature")
+				if err != nil {
+					log.Warnf("Amp RequestSanitizer: failed to remove tool_use signature from message %d: %v", msgIdx, err)
+					keepBlocks = append(keepBlocks, block.Value())
+					continue
+				}
+				contentModified = true
+				keepBlocks = append(keepBlocks, gjson.Parse(cleaned).Value())
+				continue
 			}
 			keepBlocks = append(keepBlocks, block.Value())
 		}
 
-		if removedCount > 0 {
+		if contentModified {
 			contentPath := fmt.Sprintf("messages.%d.content", msgIdx)
 			var err error
 			if len(keepBlocks) == 0 {
@@ -357,11 +370,13 @@ func SanitizeAmpRequestBody(body []byte) []byte {
 				body, err = sjson.SetBytes(body, contentPath, keepBlocks)
 			}
 			if err != nil {
-				log.Warnf("Amp RequestSanitizer: failed to remove thinking blocks from message %d: %v", msgIdx, err)
+				log.Warnf("Amp RequestSanitizer: failed to sanitize message %d: %v", msgIdx, err)
 				continue
 			}
 			modified = true
-			log.Debugf("Amp RequestSanitizer: removed %d thinking blocks with invalid signatures from message %d", removedCount, msgIdx)
+			if removedCount > 0 {
+				log.Debugf("Amp RequestSanitizer: removed %d thinking blocks with invalid signatures from message %d", removedCount, msgIdx)
+			}
 		}
 	}
 

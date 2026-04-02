@@ -675,7 +675,7 @@ func detectSubagent(body []byte) bool {
 	if hasSubagentMarkers(lastMessageText) {
 		return true
 	}
-	if userMessageCount == 0 || userMessageCount%5 != 0 {
+	if userMessageCount == 0 || userMessageCount%10 != 0 {
 		return true
 	}
 	return false
@@ -1098,6 +1098,14 @@ func normalizeGitHubCopilotClaudeMessagesBody(body []byte) []byte {
 	}
 	if gjson.GetBytes(body, "metadata").Exists() {
 		body, _ = sjson.DeleteBytes(body, "metadata")
+	}
+	if system := gjson.GetBytes(body, "system"); system.Exists() && system.IsArray() {
+		for i, block := range system.Array() {
+			path := fmt.Sprintf("system.%d.cache_control.scope", i)
+			if block.Get("cache_control.scope").Exists() {
+				body, _ = sjson.DeleteBytes(body, path)
+			}
+		}
 	}
 	return body
 }

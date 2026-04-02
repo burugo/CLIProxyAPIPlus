@@ -3,6 +3,8 @@ package amp
 import (
 	"strings"
 	"testing"
+
+	"github.com/tidwall/gjson"
 )
 
 func TestRewriteModelInResponse_TopLevel(t *testing.T) {
@@ -142,6 +144,54 @@ func TestSanitizeAmpRequestBody_RemovesWhitespaceAndNonStringSignatures(t *testi
 	}
 	if !contains(result, []byte("keep-text")) {
 		t.Fatalf("expected non-thinking content to remain, got %s", string(result))
+	}
+}
+
+func TestSanitizeAmpRequestBody_StripsToolUseSignatureButKeepsToolUse(t *testing.T) {
+	input := []byte(`{"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Read","input":{"path":"/tmp/a"},"signature":""},{"type":"thinking","thinking":"keep-valid","signature":"valid-signature"},{"type":"text","text":"keep-text"}]}]}`)
+	result := SanitizeAmpRequestBody(input)
+
+	if gjson.GetBytes(result, `messages.0.content.0.type`).String() != "tool_use" {
+		t.Fatalf("expected first block to remain tool_use, got %s", string(result))
+	}
+	if gjson.GetBytes(result, `messages.0.content.0.id`).String() != "toolu_1" {
+		t.Fatalf("expected tool_use.id to remain, got %s", string(result))
+	}
+	if gjson.GetBytes(result, `messages.0.content.0.name`).String() != "Read" {
+		t.Fatalf("expected tool_use.name to remain, got %s", string(result))
+	}
+	if !gjson.GetBytes(result, `messages.0.content.0.input.path`).Exists() {
+		t.Fatalf("expected tool_use.input to remain, got %s", string(result))
+	}
+	if gjson.GetBytes(result, `messages.0.content.0.signature`).Exists() {
+		t.Fatalf("expected tool_use.signature to be removed, got %s", string(result))
+	}
+	if !contains(result, []byte("keep-valid")) {
+		t.Fatalf("expected valid thinking block to remain, got %s", string(result))
+	}
+	if !contains(result, []byte("keep-text")) {
+		t.Fatalf("expected text block to remain, got %s", string(result))
+	}
+}
+
+func TestSanitizeAmpRequestBody_LeavesToolUseWithoutSignatureUntouched(t *testing.T) {
+	input := []byte(`{"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Read","input":{"path":"/tmp/a"}}]}]}`)
+	result := SanitizeAmpRequestBody(input)
+
+	if gjson.GetBytes(result, `messages.0.content.0.type`).String() != "tool_use" {
+		t.Fatalf("expected tool_use block to remain, got %s", string(result))
+	}
+	if gjson.GetBytes(result, `messages.0.content.0.id`).String() != "toolu_1" {
+		t.Fatalf("expected tool_use.id to remain, got %s", string(result))
+	}
+	if gjson.GetBytes(result, `messages.0.content.0.name`).String() != "Read" {
+		t.Fatalf("expected tool_use.name to remain, got %s", string(result))
+	}
+	if !gjson.GetBytes(result, `messages.0.content.0.input.path`).Exists() {
+		t.Fatalf("expected tool_use.input to remain, got %s", string(result))
+	}
+	if gjson.GetBytes(result, `messages.0.content.0.signature`).Exists() {
+		t.Fatalf("expected no tool_use.signature field, got %s", string(result))
 	}
 }
 
