@@ -386,3 +386,44 @@ func TestTruncationRemovedForCodexCompatibility(t *testing.T) {
 		t.Fatalf("truncation should be removed for Codex compatibility")
 	}
 }
+
+func TestConvertOpenAIResponsesRequestToCodex_DropsReasoningItemsWithOversizedID(t *testing.T) {
+	inputJSON := []byte(`{
+		"model": "gpt-5.4",
+		"input": [
+			{
+				"type": "message",
+				"role": "user",
+				"content": [{"type": "input_text", "text": "hello"}]
+			},
+			{
+				"type": "reasoning",
+				"id": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789___",
+				"summary": [{"type": "summary_text", "text": "thinking"}],
+				"encrypted_content": "opaque"
+			},
+			{
+				"type": "message",
+				"id": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789___retained",
+				"role": "assistant",
+				"content": [{"type": "output_text", "text": "world"}]
+			}
+		]
+	}`)
+
+	output := ConvertOpenAIResponsesRequestToCodex("gpt-5.4", inputJSON, false)
+	items := gjson.GetBytes(output, "input").Array()
+
+	if len(items) != 2 {
+		t.Fatalf("expected oversized reasoning item to be dropped, got %d items: %s", len(items), string(output))
+	}
+	if got := items[0].Get("type").String(); got != "message" {
+		t.Fatalf("input[0].type = %q, want %q", got, "message")
+	}
+	if got := items[1].Get("role").String(); got != "assistant" {
+		t.Fatalf("input[1].role = %q, want %q", got, "assistant")
+	}
+	if gjson.GetBytes(output, "input.1.id").Exists() {
+		t.Fatalf("unexpected id on retained item: %s", gjson.GetBytes(output, "input.1.id").Raw)
+	}
+}

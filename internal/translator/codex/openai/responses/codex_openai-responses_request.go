@@ -41,6 +41,7 @@ func ConvertOpenAIResponsesRequestToCodex(modelName string, inputRawJSON []byte,
 
 	// Convert role "system" to "developer" in input array to comply with Codex API requirements.
 	rawJSON = convertSystemRoleToDeveloper(rawJSON)
+	rawJSON = normalizeCodexInputItems(rawJSON)
 	rawJSON = normalizeCodexBuiltinTools(rawJSON)
 
 	return rawJSON
@@ -84,6 +85,45 @@ func convertSystemRoleToDeveloper(rawJSON []byte) []byte {
 	}
 
 	return result
+}
+
+func normalizeCodexInputItems(rawJSON []byte) []byte {
+	const codexInputIDLimit = 64
+
+	inputResult := gjson.GetBytes(rawJSON, "input")
+	if !inputResult.IsArray() {
+		return rawJSON
+	}
+
+	items := inputResult.Array()
+	normalized := []byte(`[]`)
+	changed := false
+
+	for i := 0; i < len(items); i++ {
+		item := items[i]
+		itemJSON := []byte(item.Raw)
+		id := item.Get("id").String()
+		if len(id) > codexInputIDLimit {
+			changed = true
+			if item.Get("type").String() == "reasoning" {
+				log.Debugf("codex responses: dropped reasoning input item at index %d with oversized id length %d", i, len(id))
+				continue
+			}
+			itemJSON, _ = sjson.DeleteBytes(itemJSON, "id")
+			log.Debugf("codex responses: removed oversized input id at index %d (length %d)", i, len(id))
+		}
+		normalized, _ = sjson.SetRawBytes(normalized, "-1", itemJSON)
+	}
+
+	if !changed {
+		return rawJSON
+	}
+
+	updated, err := sjson.SetRawBytes(rawJSON, "input", normalized)
+	if err != nil {
+		return rawJSON
+	}
+	return updated
 }
 
 // normalizeCodexBuiltinTools rewrites legacy/preview built-in tool variants to the
